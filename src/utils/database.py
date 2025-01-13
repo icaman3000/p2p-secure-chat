@@ -286,14 +286,30 @@ def send_friend_request(sender_id, recipient_username):
             raise ValueError("Already in your contact list")
         
         # 检查是否已经有待处理的请求
-        existing_request = session.query(FriendRequest).filter_by(
-            sender_id=sender_id,
-            recipient_id=recipient.id,
-            status=RequestStatus.PENDING.value
-        ).first()
+        existing_request = session.query(FriendRequest).filter(
+            FriendRequest.sender_id == sender_id,
+            FriendRequest.recipient_id == recipient.id,
+        ).order_by(FriendRequest.created_at.desc()).first()
         
         if existing_request:
-            raise ValueError("Friend request already sent")
+            if existing_request.status == RequestStatus.PENDING.value:
+                raise ValueError("Friend request already sent and pending")
+            elif existing_request.status == RequestStatus.REJECTED.value:
+                # 如果之前的请求被拒绝，允许重新发送
+                request = FriendRequest(
+                    sender_id=sender_id,
+                    recipient_id=recipient.id
+                )
+                session.add(request)
+                session.commit()
+                return {
+                    "id": request.id,
+                    "recipient_id": recipient.id,
+                    "recipient_username": recipient_username,
+                    "status": request.status
+                }
+            elif existing_request.status == RequestStatus.ACCEPTED.value:
+                raise ValueError("Friend request was already accepted")
         
         # 创建新的好友请求
         request = FriendRequest(
@@ -379,6 +395,28 @@ def get_pending_friend_requests(user_id):
                 "id": request.id,
                 "sender_id": request.sender_id,
                 "sender_username": sender.username if sender else "Unknown",
+                "created_at": request.created_at.isoformat()
+            })
+        return result
+    finally:
+        session.close()
+
+def get_sent_friend_requests(user_id):
+    """获取用户发送的待处理好友请求"""
+    session = Session()
+    try:
+        requests = session.query(FriendRequest).filter_by(
+            sender_id=user_id,
+            status=RequestStatus.PENDING.value
+        ).all()
+        
+        result = []
+        for request in requests:
+            recipient = get_user_by_id(request.recipient_id)
+            result.append({
+                "id": request.id,
+                "recipient_id": request.recipient_id,
+                "recipient_username": recipient.username if recipient else "Unknown",
                 "created_at": request.created_at.isoformat()
             })
         return result
