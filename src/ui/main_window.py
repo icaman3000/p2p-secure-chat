@@ -19,220 +19,194 @@ from src.utils.network import network_manager
 import asyncio
 import qasync
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, user_id, username):
         super().__init__()
-        self.setWindowTitle("Secure Chat")
-        self.setMinimumSize(800, 600)
+        self.user_id = user_id
+        self.username = username
+        self.network_manager = None
+        self.contact_list = None
+        self.chat_widgets = {}
+        self.unread_counts = {}
         
-        # 初始化主题
-        self.init_theme()
+        # 从环境变量获取端口配置
+        self.node_port = int(os.getenv('NODE_PORT', 8084))
+        self.discovery_port = int(os.getenv('DISCOVERY_PORT', 8085))
         
-        # 创建主窗口部件
-        self.central_widget = QWidget()
-        self.setCentralWidget(self.central_widget)
+        self.init_ui()
+        self.init_network()
         
-        # 创建主布局
-        self.main_layout = QHBoxLayout(self.central_widget)
+    def init_ui(self):
+        """初始化UI"""
+        self.setWindowTitle(f"P2P Chat - {self.username}")
+        self.setGeometry(100, 100, 800, 600)
         
-        # 创建左侧布局
-        left_layout = QVBoxLayout()
+        # 创建主窗口布局
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        layout = QHBoxLayout(main_widget)
         
-        # 添加用户信息标签
-        self.user_info_label = QLabel("Not logged in")
-        self.user_info_label.setStyleSheet("font-weight: bold; margin-bottom: 10px;")
-        left_layout.addWidget(self.user_info_label)
+        # 创建联系人列表
+        self.contact_list = ContactList(self.user_id)
+        layout.addWidget(self.contact_list, 1)
         
-        # 添加状态标签和进度条
-        status_layout = QHBoxLayout()
-        self.status_label = QLabel("Disconnected")
-        self.status_label.setStyleSheet("color: red;")
-        status_layout.addWidget(self.status_label)
-        
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setMaximumWidth(100)
-        self.progress_bar.hide()
-        status_layout.addWidget(self.progress_bar)
-        
-        left_layout.addLayout(status_layout)
-        
-        # 创建左侧联系人列表
-        self.contact_list = ContactList()
-        left_layout.addWidget(self.contact_list)
-        
-        self.main_layout.addLayout(left_layout, 1)
-        
-        # 创建右侧聊天区域
-        self.chat_stack = QStackedWidget()
-        self.main_layout.addWidget(self.chat_stack, 3)
-        
-        # 创建登录窗口
-        self.login_widget = LoginWidget()
-        self.chat_stack.addWidget(self.login_widget)
+        # 创建聊天区域容器
+        self.chat_container = QStackedWidget()
+        layout.addWidget(self.chat_container, 2)
         
         # 连接信号
         self.contact_list.contact_selected.connect(self.show_chat)
-        self.login_widget.login_successful.connect(self.on_login_successful)
-        network_manager.connection_status_changed.connect(self.on_connection_status_changed)
-        network_manager.message_received.connect(self.on_message_received)
+        self.contact_list.contact_added.connect(self.handle_contact_added)
         
-        # 初始化聊天窗口缓存
-        self.chat_widgets = {}
-    
-    def init_theme(self):
-        """初始化应用主题"""
-        # 设置应用样式
-        self.setStyle(QStyleFactory.create("Fusion"))
-        
-        # 创建深色主题调色板
-        palette = QPalette()
-        palette.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))
-        palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.white)
-        palette.setColor(QPalette.ColorRole.Base, QColor(25, 25, 25))
-        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(53, 53, 53))
-        palette.setColor(QPalette.ColorRole.ToolTipBase, Qt.GlobalColor.white)
-        palette.setColor(QPalette.ColorRole.ToolTipText, Qt.GlobalColor.white)
-        palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.white)
-        palette.setColor(QPalette.ColorRole.Button, QColor(53, 53, 53))
-        palette.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.white)
-        palette.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red)
-        palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218))
-        palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
-        palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.black)
-        
-        self.setPalette(palette)
-    
-    def show_chat(self, contact_id):
-        """显示与选中联系人的聊天界面"""
+    def init_network(self):
+        """初始化网络管理器"""
         try:
-            # 显示加载指示器
-            self.progress_bar.setRange(0, 0)
-            self.progress_bar.show()
+            self.network_manager = NetworkManager(
+                node_port=self.node_port,
+                discovery_port=self.discovery_port
+            )
             
-            # 延迟加载聊天窗口
-            chat_widget = self.chat_widgets.get(contact_id)
-            if not chat_widget:
-                chat_widget = ChatWidget(contact_id)
-                self.chat_widgets[contact_id] = chat_widget
-                self.chat_stack.addWidget(chat_widget)
+            # 连接网络信号
+            self.network_manager.message_received.connect(self.handle_message)
+            self.network_manager.friend_request_received.connect(self.handle_friend_request)
+            self.network_manager.friend_response_received.connect(self.handle_friend_response)
+            self.network_manager.connection_status_changed.connect(self.handle_connection_status)
             
-            self.chat_stack.setCurrentWidget(chat_widget)
-            
-            # 标记消息为已读并更新联系人列表
-            from src.utils.database import mark_messages_as_read
-            mark_messages_as_read(network_manager.user_id, contact_id)
-            self.contact_list.update_unread_count(contact_id)
+            # 启动网络管理器
+            asyncio.create_task(self.network_manager.start(self.user_id, self.username))
             
         except Exception as e:
-            logger.error(f"Error showing chat: {e}")
-            QMessageBox.warning(self, "Error", f"Failed to open chat: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to initialize network: {e}")
+            
+    def show_chat(self, contact_id, contact_name):
+        """显示与指定联系人的聊天窗口"""
+        if contact_id not in self.chat_widgets:
+            # 创建新的聊天窗口
+            chat_widget = ChatWidget(
+                self.user_id,
+                contact_id,
+                contact_name,
+                self.network_manager
+            )
+            self.chat_widgets[contact_id] = chat_widget
+            self.chat_container.addWidget(chat_widget)
+            
+        # 显示聊天窗口
+        chat_widget = self.chat_widgets[contact_id]
+        self.chat_container.setCurrentWidget(chat_widget)
         
-        finally:
-            # 隐藏加载指示器
-            self.progress_bar.hide()
-    
-    def on_login_successful(self, user_id, username):
-        """登录成功的处理函数"""
-        try:
-            self.user_id = user_id
-            self.username = username
+        # 清除未读消息计数
+        if contact_id in self.unread_counts:
+            self.unread_counts[contact_id] = 0
+            self.contact_list.update_unread_count(contact_id, 0)
             
-            # 显示加载指示器
-            self.progress_bar.setRange(0, 0)
-            self.progress_bar.show()
-            
-            # 显示主界面
-            self.show_main_interface()
-            
-            # 连接到网络
-            asyncio.create_task(self._connect_to_network())
-            
-        except Exception as e:
-            logger.error(f"Error handling login: {e}")
-            QMessageBox.warning(self, "Error", f"Failed to initialize: {str(e)}")
-            self.progress_bar.hide()
-    
-    async def _connect_to_network(self):
-        """连接到网络（异步）"""
-        try:
-            await network_manager.start(self.user_id, self.username)
-            # 更新未读消息数
-            self.update_unread_counts()
-        except Exception as e:
-            logger.error(f"Error connecting to network: {e}")
-            QMessageBox.warning(self, "Error", f"Failed to connect: {str(e)}")
-        finally:
-            self.progress_bar.hide()
-    
-    def on_connection_status_changed(self, connected):
-        """处理连接状态变化"""
-        if connected:
-            self.status_label.setText("Connected")
-            self.status_label.setStyleSheet("color: #2ecc71;")  # 使用更柔和的绿色
-            # 连接成功后加载联系人列表
-            self.contact_list.load_contacts()
-        else:
-            self.status_label.setText("Disconnected")
-            self.status_label.setStyleSheet("color: #e74c3c;")  # 使用更柔和的红色
-    
-    def on_message_received(self, message):
+    def handle_message(self, message):
         """处理接收到的消息"""
         try:
             sender_id = message["sender_id"]
             
-            # 延迟加载聊天窗口
-            chat_widget = self.chat_widgets.get(sender_id)
-            if not chat_widget:
-                chat_widget = ChatWidget(sender_id)
+            # 如果发送者的聊天窗口不存在，创建一个
+            if sender_id not in self.chat_widgets:
+                sender_name = message.get("sender_username", f"User {sender_id}")
+                chat_widget = ChatWidget(
+                    self.user_id,
+                    sender_id,
+                    sender_name,
+                    self.network_manager
+                )
                 self.chat_widgets[sender_id] = chat_widget
-                self.chat_stack.addWidget(chat_widget)
+                self.chat_container.addWidget(chat_widget)
             
-            # 获取聊天窗口并显示消息
-            chat_widget.receive_message(message)
+            # 更新聊天窗口
+            chat_widget = self.chat_widgets[sender_id]
+            chat_widget.add_message(message)
             
-            # 如果当前不是这个聊天窗口，更新未读消息数量
-            if self.chat_stack.currentWidget() != chat_widget:
-                self.contact_list.update_unread_count(sender_id)
+            # 如果当前没有显示该聊天窗口，增加未读消息计数
+            if self.chat_container.currentWidget() != chat_widget:
+                self.unread_counts[sender_id] = self.unread_counts.get(sender_id, 0) + 1
+                self.contact_list.update_unread_count(sender_id, self.unread_counts[sender_id])
                 
         except Exception as e:
-            logger.error(f"Error handling received message: {e}")
-    
+            QMessageBox.warning(self, "Error", f"Error handling message: {e}")
+            
+    def handle_friend_request(self, request):
+        """处理好友请求"""
+        try:
+            sender_id = request["sender_id"]
+            sender_name = request.get("sender_username", f"User {sender_id}")
+            
+            # 显示确认对话框
+            reply = QMessageBox.question(
+                self,
+                "Friend Request",
+                f"Accept friend request from {sender_name}?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            
+            # 发送响应
+            accepted = reply == QMessageBox.Yes
+            asyncio.create_task(
+                self.network_manager.handle_friend_response(sender_id, accepted)
+            )
+            
+            # 如果接受请求，添加到联系人列表
+            if accepted:
+                self.contact_list.add_contact(sender_id, sender_name)
+                
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Error handling friend request: {e}")
+            
+    def handle_friend_response(self, response):
+        """处理好友请求响应"""
+        try:
+            sender_id = response["sender_id"]
+            sender_name = response.get("sender_username", f"User {sender_id}")
+            accepted = response["accepted"]
+            
+            if accepted:
+                # 添加到联系人列表
+                self.contact_list.add_contact(sender_id, sender_name)
+                QMessageBox.information(
+                    self,
+                    "Friend Request Accepted",
+                    f"{sender_name} accepted your friend request"
+                )
+            else:
+                QMessageBox.information(
+                    self,
+                    "Friend Request Rejected",
+                    f"{sender_name} rejected your friend request"
+                )
+                
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Error handling friend response: {e}")
+            
+    def handle_contact_added(self, contact_id, contact_name):
+        """处理新添加的联系人"""
+        try:
+            # 发送好友请求
+            asyncio.create_task(
+                self.network_manager.send_friend_request(contact_id)
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Error sending friend request: {e}")
+            
+    def handle_connection_status(self, connected):
+        """处理连接状态变化"""
+        status = "Connected" if connected else "Disconnected"
+        self.statusBar().showMessage(status)
+        
     def closeEvent(self, event):
-        """处理窗口关闭事件"""
+        """窗口关闭事件"""
         try:
-            # 断开连接
-            asyncio.create_task(network_manager.disconnect())
-            # 等待一小段时间以确保断开连接的消息被发送
-            QTimer.singleShot(500, lambda: super().closeEvent(event))
+            # 停止网络管理器
+            if self.network_manager:
+                asyncio.create_task(self.network_manager.stop())
+            event.accept()
         except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
-            super().closeEvent(event)
-    
-    def show_main_interface(self):
-        """显示主界面"""
-        try:
-            # 更新用户信息显示
-            self.user_info_label.setText(f"Logged in as: {self.username}")
-            
-            # 加载联系人列表
-            self.contact_list.load_contacts()
-            
-            # 创建默认聊天页面
-            default_chat = ChatWidget(None)
-            self.chat_stack.addWidget(default_chat)
-            self.chat_stack.setCurrentWidget(default_chat)
-            
-        except Exception as e:
-            logger.error(f"Error showing main interface: {e}")
-            QMessageBox.warning(self, "Error", f"Failed to load interface: {str(e)}")
-    
-    def update_unread_counts(self):
-        """更新所有联系人的未读消息数"""
-        try:
-            if hasattr(self, 'contact_list'):
-                self.contact_list.load_contacts()
-        except Exception as e:
-            logger.error(f"Error updating unread counts: {e}") 
+            QMessageBox.warning(self, "Error", f"Error closing application: {e}")
+            event.ignore() 

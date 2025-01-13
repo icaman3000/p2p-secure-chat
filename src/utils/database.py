@@ -80,9 +80,12 @@ class Message(Base):
 # 创建数据库表
 Base.metadata.create_all(engine)
 
-def register_user(username):
+def register_user(username, session=None):
     """注册新用户"""
-    session = Session()
+    should_close = False
+    if session is None:
+        session = Session()
+        should_close = True
     try:
         # 检查用户名是否已存在
         if session.query(User).filter_by(username=username).first():
@@ -109,39 +112,55 @@ def register_user(username):
         session.rollback()
         raise e
     finally:
-        session.close()
+        if should_close:
+            session.close()
 
-def get_user_by_username(username):
+def get_user_by_username(username, session=None):
     """通过用户名查找用户"""
-    session = Session()
+    should_close = False
+    if session is None:
+        session = Session()
+        should_close = True
     try:
         return session.query(User).filter_by(username=username).first()
     finally:
-        session.close()
+        if should_close:
+            session.close()
 
-def get_user_by_id(user_id):
+def get_user_by_id(user_id, session=None):
     """通过ID查找用户"""
-    session = Session()
+    should_close = False
+    if session is None:
+        session = Session()
+        should_close = True
     try:
         return session.query(User).filter_by(id=user_id).first()
     finally:
-        session.close()
+        if should_close:
+            session.close()
 
-def get_contacts(user_id):
+def get_contacts(user_id, session=None):
     """获取联系人列表"""
-    session = Session()
+    should_close = False
+    if session is None:
+        session = Session()
+        should_close = True
     try:
         contacts = session.query(Contact).filter_by(user_id=user_id).all()
         return [{"id": c.contact_user_id, "name": c.name} for c in contacts]
     finally:
-        session.close()
+        if should_close:
+            session.close()
 
-def add_contact(user_id, username):
+def add_contact(user_id, username, session=None):
     """添加新联系人"""
-    session = Session()
+    should_close = False
+    if session is None:
+        session = Session()
+        should_close = True
     try:
         # 查找要添加的用户
-        contact_user = get_user_by_username(username)
+        contact_user = get_user_by_username(username, session)
         if not contact_user:
             raise ValueError("User not found")
         
@@ -161,8 +180,7 @@ def add_contact(user_id, username):
         contact = Contact(
             user_id=user_id,
             contact_user_id=contact_user.id,
-            name=username,
-            public_key=""  # TODO: 获取用户的公钥
+            name=username
         )
         session.add(contact)
         session.commit()
@@ -178,18 +196,21 @@ def add_contact(user_id, username):
         session.rollback()
         raise e
     finally:
-        session.close()
+        if should_close:
+            session.close()
 
-def save_message(sender_id, recipient_id, content, timestamp=None):
+def save_message(sender_id, recipient_id, content, session=None, timestamp=None):
     """保存消息到数据库"""
-    session = Session()
+    should_close = False
+    if session is None:
+        session = Session()
+        should_close = True
     try:
         message = Message(
             sender_id=sender_id,
             recipient_id=recipient_id,
             content=content,
             type="sent" if sender_id == network_manager.user_id else "received",
-            encrypted=True,
             is_read=sender_id == network_manager.user_id,  # 发送的消息默认已读
             timestamp=datetime.fromisoformat(timestamp) if timestamp else datetime.utcnow()
         )
@@ -199,18 +220,21 @@ def save_message(sender_id, recipient_id, content, timestamp=None):
             "id": message.id,
             "type": message.type,
             "content": message.content,
-            "encrypted": message.encrypted,
             "timestamp": message.timestamp.isoformat()
         }
     except Exception as e:
         session.rollback()
         raise e
     finally:
-        session.close()
+        if should_close:
+            session.close()
 
-def mark_messages_as_read(user_id, contact_id):
+def mark_messages_as_read(user_id, contact_id, session=None):
     """将与特定联系人的所有未读消息标记为已读"""
-    session = Session()
+    should_close = False
+    if session is None:
+        session = Session()
+        should_close = True
     try:
         session.query(Message).filter(
             Message.recipient_id == user_id,
@@ -222,11 +246,15 @@ def mark_messages_as_read(user_id, contact_id):
         session.rollback()
         raise e
     finally:
-        session.close()
+        if should_close:
+            session.close()
 
-def get_unread_message_counts(user_id):
+def get_unread_message_counts(user_id, session=None):
     """获取每个联系人的未读消息数量"""
-    session = Session()
+    should_close = False
+    if session is None:
+        session = Session()
+        should_close = True
     try:
         result = {}
         unread_counts = session.query(
@@ -241,27 +269,30 @@ def get_unread_message_counts(user_id):
             result[sender_id] = count
         return result
     finally:
-        session.close()
+        if should_close:
+            session.close()
 
-def get_messages(user_id, contact_id):
+def get_messages(user_id, contact_id, session=None):
     """获取与特定联系人的消息历史"""
-    session = Session()
+    should_close = False
+    if session is None:
+        session = Session()
+        should_close = True
     try:
         messages = session.query(Message).filter(
             (Message.sender_id == user_id) & (Message.recipient_id == contact_id) |
             (Message.sender_id == contact_id) & (Message.recipient_id == user_id)
-        ).order_by(Message.timestamp).all()
+        ).order_by(Message.timestamp.desc()).all()
         
         return [{
             "id": m.id,
             "type": m.type,
             "content": m.content,
-            "encrypted": m.encrypted,
-            "timestamp": m.timestamp,
-            "is_read": m.is_read
+            "timestamp": m.timestamp.isoformat()
         } for m in messages]
     finally:
-        session.close() 
+        if should_close:
+            session.close()
 
 def send_friend_request(sender_id, recipient_username):
     """发送好友请求"""
