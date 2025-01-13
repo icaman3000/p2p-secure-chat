@@ -4,7 +4,6 @@ from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 import os
 import enum
-from .network import network_manager
 from .crypto import generate_key_pair
 
 # 创建数据库目录
@@ -199,7 +198,7 @@ def add_contact(user_id, username, session=None):
         if should_close:
             session.close()
 
-def save_message(sender_id, recipient_id, content, session=None, timestamp=None):
+def save_message(sender_id, recipient_id, content, timestamp):
     """保存消息到数据库"""
     should_close = False
     if session is None:
@@ -452,4 +451,13 @@ def get_sent_friend_requests(user_id):
             })
         return result
     finally:
-        session.close() 
+        session.close()
+
+def handle_message_received(message):
+    """处理接收到的消息并保存到数据库"""
+    save_message(
+        sender_id=message["sender_id"],
+        recipient_id=message["recipient_id"],
+        content=message["content"],
+        timestamp=message["timestamp"]
+    ) 

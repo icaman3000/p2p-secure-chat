@@ -10,7 +10,6 @@ from collections import deque
 import logging
 import time
 from typing import Union
-from .database import save_message
 
 load_dotenv()
 
@@ -21,7 +20,7 @@ logger = logging.getLogger(__name__)
 class NetworkManager(QObject):
     """网络管理器类,负责P2P网络通信"""
     
-    message_received = pyqtSignal(int, str)  # 消息接收信号
+    message_received = pyqtSignal(dict)  # 消息接收信号，发送整个消息对象
     friend_request_received = pyqtSignal(int)  # 好友请求信号
     friend_response_received = pyqtSignal(int, bool)  # 好友响应信号
     
@@ -189,13 +188,8 @@ class NetworkManager(QObject):
         """处理接收到的消息"""
         try:
             if message["type"] == "message":
-                # 保存消息到数据库
-                save_message(
-                    sender_id=message["sender_id"],
-                    recipient_id=message["recipient_id"],
-                    content=message["content"],
-                    timestamp=message["timestamp"]
-                )
+                # 发出消息接收信号而不是直接保存
+                self.message_received.emit(message)
             elif message["type"] == "friend_request":
                 # 处理好友请求
                 pass
