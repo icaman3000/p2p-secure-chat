@@ -10,6 +10,7 @@ from collections import deque
 import logging
 import time
 from typing import Union
+from .database import save_message
 
 load_dotenv()
 
