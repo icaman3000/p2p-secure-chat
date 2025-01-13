@@ -40,8 +40,10 @@ def main():
     loop = qasync.QEventLoop(app)
     asyncio.set_event_loop(loop)
     
-    # 创建主窗口
-    window = MainWindow()
+    # 创建主窗口 (临时使用测试用户)
+    user_id = 1
+    username = "test_user"
+    window = MainWindow(user_id=user_id, username=username)
     window.show()
     
     # 创建定时器以处理异步事件
