@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QLineEdit, QPushButton, QHBoxLayout
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QLineEdit, QPushButton
 from PyQt6.QtCore import Qt
 from src.utils.crypto import encrypt_message, decrypt_message
 from src.utils.network import network_manager
@@ -7,34 +7,28 @@ from datetime import datetime
 import asyncio
 
 class ChatWidget(QWidget):
-    def __init__(self, user_id, contact_id, contact_name, network_manager):
+    def __init__(self, contact_id):
         super().__init__()
-        self.user_id = user_id
         self.contact_id = contact_id
-        self.contact_name = contact_name
-        self.network_manager = network_manager
         self.init_ui()
     
     def init_ui(self):
-        layout = QVBoxLayout()
+        layout = QVBoxLayout(self)
         
-        # 消息显示区域
-        self.message_display = QTextEdit()
-        self.message_display.setReadOnly(True)
-        layout.addWidget(self.message_display)
+        # 聊天记录显示区域
+        self.chat_display = QTextEdit()
+        self.chat_display.setReadOnly(True)
+        layout.addWidget(self.chat_display)
         
         # 消息输入区域
-        input_layout = QHBoxLayout()
         self.message_input = QLineEdit()
         self.message_input.returnPressed.connect(self.send_message)
-        input_layout.addWidget(self.message_input)
+        layout.addWidget(self.message_input)
         
-        self.send_button = QPushButton("发送")
-        self.send_button.clicked.connect(self.send_message)
-        input_layout.addWidget(self.send_button)
-        
-        layout.addLayout(input_layout)
-        self.setLayout(layout)
+        # 发送按钮
+        send_button = QPushButton("Send")
+        send_button.clicked.connect(self.send_message)
+        layout.addWidget(send_button)
     
     def format_message(self, sender_name, message, timestamp=None):
         """格式化消息显示"""
@@ -68,34 +62,28 @@ class ChatWidget(QWidget):
             )
             
             # 发送消息
-            asyncio.create_task(self._send_message_async())
+            asyncio.create_task(self._send_message_async({
+                "type": "message",
+                "sender_id": network_manager.user_id,
+                "recipient_id": self.contact_id,
+                "content": encrypted_data,
+                "timestamp": timestamp
+            }))
             
             # 显示发送的消息
             formatted_message = self.format_message("Me", message, timestamp)
-            self.message_display.append(formatted_message)
+            self.chat_display.append(formatted_message)
             self.message_input.clear()
             
         except Exception as e:
             print(f"Send message error: {str(e)}")
     
-    async def _send_message_async(self):
+    async def _send_message_async(self, message_data):
+        """异步发送消息"""
         try:
-            message_text = self.message_input.text()
-            if not message_text:
-                return
-            
-            timestamp = datetime.now(UTC).isoformat()
-            message = {
-                'sender_id': self.user_id,
-                'content': {'text': message_text},
-                'timestamp': timestamp
-            }
-            
-            await self.network_manager.send_message(self.contact_id, message)
-            self.message_input.clear()  # Clear input after successful send
-            self.display_message(message)  # Display sent message
+            await network_manager.send_message(message_data)
         except Exception as e:
-            print(f"Send message error: {str(e)}")
+            print(f"Error sending message: {str(e)}")
     
     def receive_message(self, message):
         try:
@@ -123,7 +111,7 @@ class ChatWidget(QWidget):
                 decrypted_message,
                 message.get("timestamp")
             )
-            self.message_display.append(formatted_message)
+            self.chat_display.append(formatted_message)
             
         except Exception as e:
             print(f"Error displaying message: {str(e)}")
