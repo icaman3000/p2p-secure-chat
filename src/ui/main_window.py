@@ -147,6 +147,9 @@ class MainWindow(QMainWindow):
             # 显示主界面
             self.show_main_interface()
             
+            # 立即加载联系人列表
+            self.contact_list.load_contacts()
+            
             # 连接到网络
             asyncio.create_task(self._connect_to_network())
             
@@ -172,7 +175,7 @@ class MainWindow(QMainWindow):
         if connected:
             self.status_label.setText("Connected")
             self.status_label.setStyleSheet("color: #2ecc71;")  # 使用更柔和的绿色
-            # 连接成功后加载联系人列表
+            # 再次刷新联系人列表以确保最新状态
             self.contact_list.load_contacts()
         else:
             self.status_label.setText("Disconnected")
