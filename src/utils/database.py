@@ -1,6 +1,6 @@
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, JSON, func, Enum
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, JSON, func, Enum, Index, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 import os
 import enum
@@ -20,45 +20,62 @@ class RequestStatus(enum.Enum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
 
-class FriendRequest(Base):
-    __tablename__ = "friend_requests"
-    
-    id = Column(Integer, primary_key=True)
-    sender_id = Column(Integer)  # 发送请求的用户ID
-    recipient_id = Column(Integer)  # 接收请求的用户ID
-    status = Column(String, default=RequestStatus.PENDING.value)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
 class User(Base):
     __tablename__ = "users"
     
     id = Column(Integer, primary_key=True)
-    username = Column(String, unique=True)
+    username = Column(String, unique=True, index=True)  # 添加索引
     public_key = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # 添加关系
+    contacts = relationship("Contact", foreign_keys="Contact.user_id")
+    received_requests = relationship("FriendRequest", foreign_keys="FriendRequest.recipient_id")
+
+class FriendRequest(Base):
+    __tablename__ = "friend_requests"
+    
+    id = Column(Integer, primary_key=True)
+    sender_id = Column(Integer, ForeignKey('users.id'), index=True)  # 添加外键和索引
+    recipient_id = Column(Integer, ForeignKey('users.id'), index=True)  # 添加外键和索引
+    status = Column(String, default=RequestStatus.PENDING.value)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # 创建复合索引
+    __table_args__ = (
+        Index('idx_sender_recipient', sender_id, recipient_id),
+    )
 
 class Contact(Base):
     __tablename__ = "contacts"
     
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer)  # 拥有这个联系人的用户ID
-    contact_user_id = Column(Integer)  # 联系人的用户ID
+    user_id = Column(Integer, ForeignKey('users.id'), index=True)  # 添加外键和索引
+    contact_user_id = Column(Integer, ForeignKey('users.id'), index=True)  # 添加外键和索引
     name = Column(String)
-    public_key = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # 创建复合索引
+    __table_args__ = (
+        Index('idx_user_contact', user_id, contact_user_id, unique=True),  # 确保不会重复添加联系人
+    )
 
 class Message(Base):
     __tablename__ = "messages"
     
     id = Column(Integer, primary_key=True)
-    sender_id = Column(Integer)
-    recipient_id = Column(Integer)
+    sender_id = Column(Integer, ForeignKey('users.id'), index=True)  # 添加外键和索引
+    recipient_id = Column(Integer, ForeignKey('users.id'), index=True)  # 添加外键和索引
     content = Column(JSON)  # 存储加密的消息和密钥
     type = Column(String)  # sent/received
-    encrypted = Column(Boolean, default=True)
-    timestamp = Column(DateTime, default=datetime.utcnow)
-    is_read = Column(Boolean, default=False)  # 添加已读状态
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)  # 添加索引
+    is_read = Column(Boolean, default=False, index=True)  # 添加索引
+    
+    # 创建复合索引
+    __table_args__ = (
+        Index('idx_conversation', sender_id, recipient_id, timestamp),
+    )
 
 # 创建数据库表
 Base.metadata.create_all(engine)
