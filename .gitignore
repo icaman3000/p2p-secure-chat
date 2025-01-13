@@ -38,6 +38,10 @@ data/
 *.db
 *.pem
 *.key
+analysis/
 
 # Logs
-*.log 
+*.log
+
+# macOS
+.DS_Store 
