@@ -7,7 +7,9 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QMessageBox,
     QMenu,
-    QHBoxLayout
+    QHBoxLayout,
+    QDialog,
+    QLabel
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtGui import QFont, QColor
@@ -77,19 +79,48 @@ class ContactList(QWidget):
                 QMessageBox.information(self, "待处理请求", "没有待处理的好友请求")
                 return
             
-            msg = ""
+            # 创建一个自定义对话框来显示请求
+            dialog = QDialog(self)
+            dialog.setWindowTitle("好友请求")
+            layout = QVBoxLayout()
+            
             if pending_requests:
-                msg += "收到的请求：\n"
+                layout.addWidget(QLabel("收到的请求："))
                 for req in pending_requests:
-                    msg += f"- 来自：{req['sender_username']} ({req['created_at']})\n"
-                msg += "\n"
+                    # 为每个请求创建一个水平布局
+                    req_layout = QHBoxLayout()
+                    
+                    # 添加请求信息标签
+                    req_label = QLabel(f"来自：{req['sender_username']} ({req['created_at']})")
+                    req_layout.addWidget(req_label)
+                    
+                    # 添加接受按钮
+                    accept_btn = QPushButton("接受")
+                    accept_btn.clicked.connect(lambda checked, r=req: self.handle_friend_request(r))
+                    req_layout.addWidget(accept_btn)
+                    
+                    # 添加拒绝按钮
+                    reject_btn = QPushButton("拒绝")
+                    reject_btn.clicked.connect(lambda checked, r=req: self.handle_friend_request(r, False))
+                    req_layout.addWidget(reject_btn)
+                    
+                    # 将这个请求的布局添加到主布局
+                    layout.addLayout(req_layout)
+                
+                layout.addWidget(QLabel(""))  # 添加一个空行作为分隔
             
             if sent_requests:
-                msg += "发出的请求：\n"
+                layout.addWidget(QLabel("发出的请求："))
                 for req in sent_requests:
-                    msg += f"- 发给：{req['recipient_username']} ({req['created_at']})\n"
+                    layout.addWidget(QLabel(f"发给：{req['recipient_username']} ({req['created_at']})"))
             
-            QMessageBox.information(self, "待处理请求", msg)
+            # 添加关闭按钮
+            close_btn = QPushButton("关闭")
+            close_btn.clicked.connect(dialog.close)
+            layout.addWidget(close_btn)
+            
+            dialog.setLayout(layout)
+            dialog.exec()
             
         except Exception as e:
             print(f"Error showing pending requests: {e}")
