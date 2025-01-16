@@ -27,8 +27,9 @@ class NetworkManager(QObject):
         self.username = None
         self.websocket = None
         self.running = False
-        self.node_port = int(os.getenv('NODE_PORT', 8084))
         self.discovery = NodeDiscovery()
+        # 使用 discovery 中分配的端口
+        self.node_port = self.discovery.node_port
         self.server = None
         self.connected_peers = {}  # {user_id: websocket}
         self.message_queues = {}  # {peer_id: deque()}

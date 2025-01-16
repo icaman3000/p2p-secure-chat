@@ -250,17 +250,26 @@ class ContactList(QWidget):
     def load_contacts(self):
         """加载联系人列表"""
         try:
+            print(f"Starting to load contacts for user {network_manager.user_id}")
             self.list_widget.clear()
             contacts = get_contacts(network_manager.user_id)
+            print(f"Retrieved contacts from database: {contacts}")
             
             # 获取未读消息数量
             unread_counts = get_unread_message_counts(network_manager.user_id)
+            print(f"Unread message counts: {unread_counts}")
             
             # 检查是否有待处理的好友请求
             pending_requests = get_pending_friend_requests(network_manager.user_id)
+            print(f"Pending friend requests: {pending_requests}")
+            
             for request in pending_requests:
-                item = QListWidgetItem(f"[Pending Request] {request['sender_username']}")
+                item = QListWidgetItem(f"[待处理请求] 来自：{request['sender_username']}")
                 item.setData(100, request)  # 存储请求数据
+                font = item.font()
+                font.setBold(True)
+                item.setFont(font)
+                item.setForeground(QColor(255, 140, 0))  # 使用橙色突出显示
                 self.list_widget.addItem(item)
             
             # 添加联系人
@@ -284,8 +293,14 @@ class ContactList(QWidget):
                     item.setForeground(QColor(0, 0, 255))
                 
                 self.list_widget.addItem(item)
+            
+            print(f"Contact list updated with {self.list_widget.count()} items")
+            return contacts
+            
         except Exception as e:
             print(f"Error loading contacts: {e}")
+            logger.error(f"Error loading contacts: {e}")
+            return []
     
     def update_unread_count(self, contact_id):
         """更新特定联系人的未读消息数量"""

@@ -8,10 +8,34 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+def find_available_port(start_port=8000, end_port=9000):
+    """查找可用的端口号"""
+    for port in range(start_port, end_port):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.bind(('', port))
+                return port
+        except OSError:
+            continue
+    raise RuntimeError("No available ports found")
+
 class NodeDiscovery:
     def __init__(self):
-        self.discovery_port = int(os.getenv('DISCOVERY_PORT', 8085))
-        self.node_port = int(os.getenv('NODE_PORT', 8084))
+        # 动态获取可用端口
+        try:
+            self.discovery_port = find_available_port()
+            self.node_port = find_available_port(self.discovery_port + 1)
+            # 更新环境变量
+            os.environ['DISCOVERY_PORT'] = str(self.discovery_port)
+            os.environ['NODE_PORT'] = str(self.node_port)
+            print(f"Using discovery port: {self.discovery_port}")
+            print(f"Using node port: {self.node_port}")
+        except Exception as e:
+            print(f"Error finding available ports: {e}")
+            # 如果出错，使用默认端口
+            self.discovery_port = int(os.getenv('DISCOVERY_PORT', 8085))
+            self.node_port = int(os.getenv('NODE_PORT', 8084))
+        
         self.nodes = {}  # {node_id: {"ip": ip, "port": port, "last_seen": timestamp}}
         self.running = False
         self.node_id = None

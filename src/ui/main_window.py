@@ -144,11 +144,18 @@ class MainWindow(QMainWindow):
             self.progress_bar.setRange(0, 0)
             self.progress_bar.show()
             
-            # 显示主界面
-            self.show_main_interface()
+            # 更新用户信息显示
+            self.user_info_label.setText(f"Logged in as: {self.username}")
             
-            # 立即加载联系人列表
-            self.contact_list.load_contacts()
+            # 创建默认聊天页面
+            default_chat = ChatWidget(None)
+            self.chat_stack.addWidget(default_chat)
+            self.chat_stack.setCurrentWidget(default_chat)
+            
+            # 立即加载联系人列表并打印调试信息
+            print(f"Loading contacts for user {self.user_id}")
+            contacts = self.contact_list.load_contacts()
+            print(f"Loaded contacts: {contacts}")
             
             # 连接到网络
             asyncio.create_task(self._connect_to_network())
@@ -164,6 +171,9 @@ class MainWindow(QMainWindow):
             await network_manager.start(self.user_id, self.username)
             # 更新未读消息数
             self.update_unread_counts()
+            # 再次加载联系人列表
+            print("Reloading contacts after network connection")
+            self.contact_list.load_contacts()
         except Exception as e:
             logger.error(f"Error connecting to network: {e}")
             QMessageBox.warning(self, "Error", f"Failed to connect: {str(e)}")
@@ -176,6 +186,7 @@ class MainWindow(QMainWindow):
             self.status_label.setText("Connected")
             self.status_label.setStyleSheet("color: #2ecc71;")  # 使用更柔和的绿色
             # 再次刷新联系人列表以确保最新状态
+            print("Reloading contacts after connection status change")
             self.contact_list.load_contacts()
         else:
             self.status_label.setText("Disconnected")
