@@ -185,7 +185,7 @@ class ContactList(QWidget):
                 print(f"Error in add_contact: {e}")  # Debug log
                 QMessageBox.warning(self, "错误", f"发生错误：{str(e)}")
     
-    def handle_friend_request(self, request):
+    def handle_friend_request(self, request, accepted=True):
         """处理收到的好友请求"""
         print(f"Received friend request: {request}")  # Debug log
         # 先刷新列表以显示新的请求
@@ -250,6 +250,10 @@ class ContactList(QWidget):
     def load_contacts(self):
         """加载联系人列表"""
         try:
+            if not network_manager.user_id:
+                print("Warning: network_manager.user_id is not set yet")
+                return []
+            
             print(f"Starting to load contacts for user {network_manager.user_id}")
             self.list_widget.clear()
             contacts = get_contacts(network_manager.user_id)
@@ -299,7 +303,6 @@ class ContactList(QWidget):
             
         except Exception as e:
             print(f"Error loading contacts: {e}")
-            logger.error(f"Error loading contacts: {e}")
             return []
     
     def update_unread_count(self, contact_id):

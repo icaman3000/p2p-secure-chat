@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QMessageBox
 )
 from PyQt6.QtCore import pyqtSignal
-from src.utils.database import register_user, get_user_by_username
+from src.utils.database import register_user, get_user_by_username, verify_user
 from sqlalchemy.orm import Session
 
 class LoginWidget(QWidget):
@@ -30,6 +30,12 @@ class LoginWidget(QWidget):
         self.username_input.setPlaceholderText("Username")
         layout.addWidget(self.username_input)
         
+        # 密码输入
+        self.password_input = QLineEdit()
+        self.password_input.setPlaceholderText("Password")
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        layout.addWidget(self.password_input)
+        
         # 登录按钮
         login_button = QPushButton("Login")
         login_button.clicked.connect(self.handle_login)
@@ -45,28 +51,30 @@ class LoginWidget(QWidget):
     
     def handle_login(self):
         username = self.username_input.text().strip()
+        password = self.password_input.text()
         
-        if not username:
-            QMessageBox.warning(self, "Error", "Please enter a username")
+        if not username or not password:
+            QMessageBox.warning(self, "Error", "Please enter both username and password")
             return
         
         # 检查用户是否存在
-        user = get_user_by_username(username)
+        user = verify_user(username, password)
         if user:
-            self.login_successful.emit(user.id, username)  # 发送用户名
+            self.login_successful.emit(user['id'], username)  # 发送用户名
         else:
-            QMessageBox.warning(self, "Login Failed", "User not found")
+            QMessageBox.warning(self, "Login Failed", "Invalid username or password")
     
     def handle_register(self):
         username = self.username_input.text().strip()
+        password = self.password_input.text()
         
-        if not username:
-            QMessageBox.warning(self, "Error", "Please enter a username")
+        if not username or not password:
+            QMessageBox.warning(self, "Error", "Please enter both username and password")
             return
         
         try:
             # 注册新用户
-            user = register_user(username)
+            user = register_user(username, password)
             QMessageBox.information(self, "Success", f"Registration successful! Your user ID is: {user.id}")
             self.login_successful.emit(user.id, username)  # 发送用户名
             

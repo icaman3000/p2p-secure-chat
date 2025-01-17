@@ -86,29 +86,38 @@ class NetworkManager(QObject):
                 })
             elif message["type"] == "message":
                 try:
+                    print(f"Processing received message from user {message['sender_id']}")
+                    
                     # 解密消息
                     encrypted_data = {
                         "message": message["content"],
-                        "key": message["key"]  # 使用消息中的加密密钥
+                        "key": message["key"]
                     }
                     decrypted_content = decrypt_message(encrypted_data, self.user_id)
-                    print(f"Decrypted message content: {decrypted_content}")
+                    print(f"Message decrypted successfully")
                     
-                    # 保存解密后的消息到数据库
+                    # 保存消息到数据库
                     received_message = save_message(
                         sender_id=message["sender_id"],
                         recipient_id=self.user_id,
-                        content=decrypted_content,  # 保存解密后的内容
+                        content=message["content"],  # 保存加密的内容
+                        encryption_key=message["key"],
                         timestamp=datetime.fromisoformat(message["timestamp"]) if "timestamp" in message else None
                     )
-                    print(f"Received message saved to database: {received_message}")
+                    print(f"Message saved to database with ID: {received_message['id']}")
                     
                     # 发送解密后的消息到UI
-                    message["content"] = decrypted_content
-                    self.message_received.emit(message)
+                    self.message_received.emit({
+                        'type': 'message',
+                        'sender_id': message["sender_id"],
+                        'decrypted_content': decrypted_content,  # 发送解密后的内容
+                        'timestamp': message["timestamp"] if "timestamp" in message else datetime.utcnow().isoformat()
+                    })
                     
                     # 标记消息为已发送
                     mark_message_as_delivered(received_message['id'])
+                    print(f"Message marked as delivered")
+                    
                 except Exception as e:
                     print(f"Error processing message: {e}")
                     print(f"Message data: {message}")
@@ -128,10 +137,10 @@ class NetworkManager(QObject):
                     print(f"Processing message from {sender.username}")
                     try:
                         # 解密消息
-                        if msg.get('key'):  # 如果有加密密钥
+                        if msg.get('encryption_key'):  # 如果有加密密钥
                             encrypted_data = {
                                 "message": msg['content'],
-                                "key": msg['key']
+                                "key": msg['encryption_key']
                             }
                             decrypted_content = decrypt_message(encrypted_data, self.user_id)
                             print(f"Decrypted message: {decrypted_content}")
@@ -146,7 +155,7 @@ class NetworkManager(QObject):
                         self.message_received.emit({
                             'type': 'message',
                             'sender_id': msg['sender_id'],
-                            'content': decrypted_content,
+                            'decrypted_content': decrypted_content,  # 发送解密后的内容
                             'timestamp': msg['timestamp']
                         })
                     except Exception as e:
@@ -197,25 +206,28 @@ class NetworkManager(QObject):
                 
     async def send_message_to_peer(self, peer_id, message):
         """发送消息到对等节点"""
-        if peer_id not in self.connected_peers:
-            print(f"Peer {peer_id} not connected, queueing message")
-            if peer_id not in self.message_queue:
-                self.message_queue[peer_id] = []
-            self.message_queue[peer_id].append(message)
-            return
-            
         try:
-            websocket = self.connected_peers[peer_id]
-            await websocket.send(json.dumps(message))
-            print(f"Message sent to peer {peer_id}")
+            if peer_id in self.connected_peers:
+                # 准备发送的消息数据，只发送加密的内容
+                send_data = {
+                    "type": message["type"],
+                    "sender_id": message["sender_id"],
+                    "recipient_id": message["recipient_id"],
+                    "content": message["content"],  # 已经是加密的内容
+                    "key": message["key"],
+                    "timestamp": message["timestamp"]
+                }
+                await self.connected_peers[peer_id].send(json.dumps(send_data))
+                return True
+            else:
+                print(f"Peer {peer_id} not connected, queueing message")
+                if peer_id not in self.message_queue:
+                    self.message_queue[peer_id] = []
+                self.message_queue[peer_id].append(message)
+                return False
         except Exception as e:
             print(f"Error sending message to peer {peer_id}: {e}")
-            # 将消息加入队列
-            if peer_id not in self.message_queue:
-                self.message_queue[peer_id] = []
-            self.message_queue[peer_id].append(message)
-            # 关闭连接并尝试重连
-            await self.close_peer_connection(peer_id)
+            return False
             
     async def close_peer_connection(self, peer_id):
         """关闭与对等节点的连接"""

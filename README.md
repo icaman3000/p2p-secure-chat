@@ -1,136 +1,143 @@
-# P2P 安全聊天应用
+# P2P安全聊天应用
 
 这是一个去中心化的端到端加密聊天应用，每个节点既是客户端也是服务器。
 
 ## 主要特性
 
-- 去中心化的 P2P 架构
+- 去中心化P2P架构
 - 端到端加密通信
-- 本地用户认证
-- 好友请求管理系统
-- 实时消息传递
-- 局域网内自动节点发现
-- 深色主题界面
-- SQLite 本地消息存储
-- 离线消息队列
-- 自动重连机制
+- 自动节点发现
+- 动态端口分配
+- 好友系统管理
+- 实时消息通知
+- 断线自动重连
+- 消息队列机制
 
 ## 系统要求
 
-- Python 3.8 或更高版本
+- Python 3.8+
 - PyQt6
 - SQLite3
-- WebSocket 支持
+- WebSocket支持
+- 网络接口支持广播
 
-## 安装步骤
+## 安装说明
 
-1. 克隆或下载项目：
+1. 克隆仓库：
 
-   ```bash
-   git clone https://github.com/icaman3000/p2p-secure-chat.git
-   cd p2p-secure-chat
-   ```
+```bash
+git clone https://github.com/your-username/p2p-secure-chat.git
+cd p2p-secure-chat
+```
 
-2. 创建并激活虚拟环境（推荐）：
+2. 创建虚拟环境：
 
-   ```bash
-   python -m venv .venv
-   # Linux/macOS:
-   source .venv/bin/activate
-   # Windows:
-   .venv\Scripts\activate
-   ```
+```bash
+# Linux/macOS
+python -m venv .venv
+source .venv/bin/activate
+
+# Windows
+python -m venv .venv
+.venv\Scripts\activate
+```
 
 3. 安装依赖：
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+pip install -r requirements.txt
+```
 
-4. 复制环境配置文件：
+## 配置说明
 
-   ```bash
-   cp .env.example .env
-   ```
+创建 `.env` 文件并配置以下参数：
 
-5. 配置 .env 文件：
+```
+NODE_PORT=8084          # 节点通信端口（自动分配）
+DISCOVERY_PORT=8085     # 节点发现端口（自动分配）
+CHAT_SERVER_URL=ws://your-ip:8084/ws  # WebSocket服务器地址
+```
 
-   ```env
-   # 节点监听端口
-   NODE_PORT=8084
-   
-   # 节点发现服务端口
-   DISCOVERY_PORT=8085
-   
-   # WebSocket 服务地址
-   CHAT_SERVER_URL=ws://192.168.2.3:8084/ws
-   ```
+注意：
 
-   说明：
-   - NODE_PORT：用于接收其他节点连接的端口
-   - DISCOVERY_PORT：用于节点发现服务的端口
-   - CHAT_SERVER_URL：需要设置为本机的局域网 IP 地址
+- 端口号会自动分配，无需手动设置
+- 请将 `your-ip` 替换为您的实际IP地址
 
 ## 运行应用
 
 1. 启动应用：
 
-   ```bash
-   python src/main.py
-   ```
+```bash
+python src/main.py
+```
 
-2. 首次使用设置：
-   - 注册新用户账号
-   - 系统将自动生成加密密钥
-   - 节点开始监听连接
+2. 首次使用：
 
-3. 使用说明：
-   - 通过用户名添加联系人
-   - 处理收到的好友请求
-   - 点击联系人开始聊天
-   - 消息自动加密传输
+- 注册新账号
+- 登录系统
+- 添加联系人
+- 开始聊天
 
-## 安全特性
+## 功能说明
 
+### 网络功能
+
+- 自动发现网络中的其他节点
+- 动态端口分配，避免端口冲突
+- 断线自动重连（最多5次尝试）
+- 心跳检测（30秒间隔）
+- 消息队列确保消息可靠传递
+
+### 好友系统
+
+- 发送/接收好友请求
+- 好友请求状态管理
+- 好友列表实时更新
+- 在线状态显示
+
+### 安全功能
+
+- RSA密钥对自动生成
 - 端到端加密通信
 - 本地密钥存储
-- 消息签名验证
-- 无中心服务器
-- 加密数据库存储
+- 安全通信协议
 
-## 网络特性
+### 用户界面
 
-- 局域网节点自动发现
-- 节点间直接通信
-- 离线消息存储
-- 自动重连机制
-- 连接状态监控
-- 心跳检测机制
-
-## 技术细节
-
-- PyQt6 图形界面
-- SQLite 数据存储
-- WebSocket 通信
-- JSON 消息格式
-- asyncio 异步处理
+- 简洁现代的界面设计
+- 未读消息提醒
+- 好友请求管理界面
+- 消息发送状态显示
+- 网络连接状态指示
 
 ## 开发说明
 
-项目结构：
+### 项目结构
 
-- `src/`
-  - `ui/`：用户界面组件
-  - `utils/`：工具模块（网络、加密、数据库）
-  - `main.py`：程序入口
-- `data/`
-  - `db/`：SQLite 数据库
-  - `keys/`：加密密钥
+```
+src/
+├── ui/          # 用户界面模块
+├── utils/       # 工具类和辅助函数
+├── models/      # 数据模型
+└── main.py      # 程序入口
+```
 
-## 参与贡献
+### 技术栈
 
-欢迎提交贡献！请通过 Pull Request 提交代码。
+- PyQt6：用户界面框架
+- SQLite：本地数据存储
+- WebSocket：网络通信
+- SQLAlchemy：数据库ORM
+- cryptography：加密功能
 
-## 开源协议
+## 贡献指南
 
-本项目采用 MIT 协议开源 - 详见 LICENSE 文件。
+1. Fork 项目
+2. 创建特性分支
+3. 提交更改
+4. 推送到分支
+5. 创建 Pull Request
+
+## 许可证
+
+MIT License

@@ -137,6 +137,7 @@ class MainWindow(QMainWindow):
     def on_login_successful(self, user_id, username):
         """登录成功的处理函数"""
         try:
+            print(f"\n用户登录成功: user_id={user_id}, username={username}")
             self.user_id = user_id
             self.username = username
             
@@ -145,38 +146,48 @@ class MainWindow(QMainWindow):
             self.progress_bar.show()
             
             # 更新用户信息显示
-            self.user_info_label.setText(f"Logged in as: {self.username}")
+            self.user_info_label.setText(f"当前用户: {self.username}")
+            
+            # 设置 network_manager 的用户信息
+            network_manager.user_id = user_id
+            network_manager.username = username
+            print("已设置 network_manager 的用户信息")
+            
+            # 立即加载联系人列表
+            print("正在加载联系人列表...")
+            contacts = self.contact_list.load_contacts()
+            print(f"已加载联系人: {contacts}")
             
             # 创建默认聊天页面
             default_chat = ChatWidget(None)
             self.chat_stack.addWidget(default_chat)
             self.chat_stack.setCurrentWidget(default_chat)
             
-            # 立即加载联系人列表并打印调试信息
-            print(f"Loading contacts for user {self.user_id}")
-            contacts = self.contact_list.load_contacts()
-            print(f"Loaded contacts: {contacts}")
-            
             # 连接到网络
             asyncio.create_task(self._connect_to_network())
             
         except Exception as e:
-            logger.error(f"Error handling login: {e}")
-            QMessageBox.warning(self, "Error", f"Failed to initialize: {str(e)}")
+            logger.error(f"登录处理出错: {e}")
+            QMessageBox.warning(self, "错误", f"初始化失败: {str(e)}")
             self.progress_bar.hide()
     
     async def _connect_to_network(self):
         """连接到网络（异步）"""
         try:
             await network_manager.start(self.user_id, self.username)
+            print(f"网络连接已建立: user_id={self.user_id}")
+            
             # 更新未读消息数
             self.update_unread_counts()
-            # 再次加载联系人列表
-            print("Reloading contacts after network connection")
-            self.contact_list.load_contacts()
+            
+            # 再次刷新联系人列表以确保最新状态
+            print("正在刷新联系人列表...")
+            contacts = self.contact_list.load_contacts()
+            print(f"联系人列表已更新: {contacts}")
+            
         except Exception as e:
-            logger.error(f"Error connecting to network: {e}")
-            QMessageBox.warning(self, "Error", f"Failed to connect: {str(e)}")
+            logger.error(f"网络连接失败: {e}")
+            QMessageBox.warning(self, "错误", f"连接失败: {str(e)}")
         finally:
             self.progress_bar.hide()
     
@@ -217,13 +228,36 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """处理窗口关闭事件"""
         try:
-            # 断开连接
-            asyncio.create_task(network_manager.disconnect())
-            # 等待一小段时间以确保断开连接的消息被发送
-            QTimer.singleShot(500, lambda: super().closeEvent(event))
-        except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
+            print("\n=== 开始应用关闭流程 ===")
+            print("1. 正在获取事件循环...")
+            loop = asyncio.get_event_loop()
+            print("2. 事件循环获取成功")
+            
+            print("3. 正在停止网络管理器...")
+            # 创建一个新的任务来停止网络管理器
+            asyncio.create_task(self._shutdown())
+            print("4. 网络管理器停止任务已创建")
+            
+            print("5. 正在调用父类关闭事件...")
             super().closeEvent(event)
+            print("6. 父类关闭事件已完成")
+            print("=== 应用关闭流程完成 ===\n")
+            
+        except Exception as e:
+            print(f"\n!!! 应用关闭过程出错 !!!")
+            print(f"错误详情: {str(e)}")
+            print(f"错误类型: {type(e).__name__}")
+            logger.error(f"Error during shutdown: {e}", exc_info=True)
+            print("正在执行应急关闭...\n")
+            super().closeEvent(event)
+    
+    async def _shutdown(self):
+        """异步关闭处理"""
+        try:
+            await network_manager.stop()
+            print("网络管理器已成功停止")
+        except Exception as e:
+            print(f"停止网络管理器时出错: {e}")
     
     def show_main_interface(self):
         """显示主界面"""

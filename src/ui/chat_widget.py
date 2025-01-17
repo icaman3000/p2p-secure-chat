@@ -2,7 +2,7 @@ from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QLineEdit, QPushBut
 from PyQt6.QtCore import Qt
 from src.utils.crypto import encrypt_message, decrypt_message
 from src.utils.network import network_manager
-from src.utils.database import get_user_by_id, save_message
+from src.utils.database import get_user_by_id, save_message, get_messages_between_users
 from datetime import datetime
 import asyncio
 
@@ -11,6 +11,8 @@ class ChatWidget(QWidget):
         super().__init__()
         self.contact_id = contact_id
         self.init_ui()
+        # 加载聊天历史记录
+        self.load_chat_history()
     
     def init_ui(self):
         layout = QVBoxLayout(self)
@@ -54,7 +56,7 @@ class ChatWidget(QWidget):
             encrypted_data = encrypt_message(message, self.contact_id)
             
             # 保存消息到数据库
-            save_message(
+            saved_message = save_message(
                 sender_id=network_manager.user_id,
                 recipient_id=self.contact_id,
                 content=encrypted_data['message'],  # 保存加密后的消息内容
@@ -67,14 +69,13 @@ class ChatWidget(QWidget):
                 "type": "message",
                 "sender_id": network_manager.user_id,
                 "recipient_id": self.contact_id,
-                "content": encrypted_data['message'],
+                "original_message": message,  # 原始消息内容
+                "content": encrypted_data['message'],  # 加密后的内容
                 "key": encrypted_data['key'],
                 "timestamp": timestamp.isoformat()
             }))
             
-            # 显示发送的消息
-            formatted_message = self.format_message("Me", message, timestamp.isoformat())
-            self.chat_display.append(formatted_message)
+            # 清空输入框
             self.message_input.clear()
             
         except Exception as e:
@@ -85,7 +86,14 @@ class ChatWidget(QWidget):
     async def _send_message_async(self, message_data):
         """异步发送消息"""
         try:
-            await network_manager.send_message(message_data)
+            if await network_manager.send_message(message_data):
+                # 消息发送成功，显示在聊天界面
+                formatted_message = self.format_message(
+                    "Me",
+                    message_data["original_message"],  # 使用原始消息内容
+                    message_data["timestamp"]
+                )
+                self.chat_display.append(formatted_message)
         except Exception as e:
             print(f"Error sending message: {str(e)}")
     
@@ -104,7 +112,7 @@ class ChatWidget(QWidget):
             # 显示接收到的消息
             formatted_message = self.format_message(
                 sender_name,
-                message['content'],  # 消息已经在NetworkManager中解密
+                message['decrypted_content'],  # 使用NetworkManager解密后的内容
                 timestamp.isoformat()
             )
             self.chat_display.append(formatted_message)
@@ -112,3 +120,47 @@ class ChatWidget(QWidget):
         except Exception as e:
             print(f"Error displaying message: {str(e)}")
             print(f"Message data: {message}") 
+
+    def load_chat_history(self):
+        """加载聊天历史记录"""
+        try:
+            # 获取与当前联系人的所有消息
+            messages = get_messages_between_users(network_manager.user_id, self.contact_id)
+            
+            # 清空当前显示
+            self.chat_display.clear()
+            
+            # 按时间顺序显示消息
+            for msg in messages:
+                try:
+                    # 确定发送者名称
+                    if msg['sender_id'] == network_manager.user_id:
+                        sender_name = "Me"
+                    else:
+                        sender = get_user_by_id(msg['sender_id'])
+                        sender_name = sender.username if sender else f"User {msg['sender_id']}"
+                    
+                    # 解密消息内容
+                    if msg.get('encryption_key'):
+                        encrypted_data = {
+                            "message": msg['content'],
+                            "key": msg['encryption_key']
+                        }
+                        content = decrypt_message(encrypted_data, network_manager.user_id)
+                    else:
+                        content = msg['content']
+                    
+                    # 格式化并显示消息
+                    formatted_message = self.format_message(
+                        sender_name,
+                        content,
+                        msg['timestamp'].isoformat() if msg['timestamp'] else None
+                    )
+                    self.chat_display.append(formatted_message)
+                    
+                except Exception as e:
+                    print(f"Error processing message {msg['id']}: {e}")
+                    continue
+                    
+        except Exception as e:
+            print(f"Error loading chat history: {e}") 
