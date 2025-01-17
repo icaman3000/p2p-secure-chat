@@ -1,19 +1,14 @@
-import asyncio
-import json
-import websockets
-from PyQt6.QtCore import QObject, pyqtSignal
-from .discovery import NodeDiscovery
 import os
-from dotenv import load_dotenv
+import sys
+import json
+import asyncio
+import websockets
 from datetime import datetime
-from collections import deque
-import logging
-
-load_dotenv()
-
-# 配置日志
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from sqlalchemy.orm import Session
+from src.utils.database import Message, Session as DBSession, get_user_by_id, save_message, get_undelivered_messages, mark_message_as_delivered
+from src.utils.crypto import encrypt_message, decrypt_message
+from PyQt6.QtCore import QObject, pyqtSignal
+import base64
 
 class NetworkManager(QObject):
     message_received = pyqtSignal(dict)
@@ -23,288 +18,316 @@ class NetworkManager(QObject):
     
     def __init__(self):
         super().__init__()
+        self.websocket = None
+        self.connected_peers = {}
+        self.heartbeat_tasks = {}
+        self.message_queue = {}
+        self.last_heartbeat = {}
+        self.heartbeat_interval = 30
         self.user_id = None
         self.username = None
-        self.websocket = None
-        self.running = False
-        self.discovery = NodeDiscovery()
-        # 使用 discovery 中分配的端口
-        self.node_port = self.discovery.node_port
-        self.server = None
-        self.connected_peers = {}  # {user_id: websocket}
-        self.message_queues = {}  # {peer_id: deque()}
-        self.reconnect_attempts = {}  # {peer_id: count}
-        self.MAX_RECONNECT_ATTEMPTS = 5
-        self.HEARTBEAT_INTERVAL = 30  # 秒
-    
-    async def start_server(self):
-        """启动WebSocket服务器"""
-        try:
-            self.server = await websockets.serve(
-                self.handle_connection,
-                '0.0.0.0',
-                self.node_port
-            )
-            logger.info(f"P2P node listening on port {self.node_port}")
-        except Exception as e:
-            logger.error(f"Failed to start server: {e}")
-            raise
-    
-    async def handle_connection(self, websocket, path):
-        """处理新的WebSocket连接"""
-        peer_id = None
-        try:
-            # 等待对方发送身份信息
-            auth_message = await websocket.recv()
-            auth_data = json.loads(auth_message)
-            peer_id = auth_data.get('user_id')
-            
-            if peer_id:
-                self.connected_peers[peer_id] = websocket
-                self.reconnect_attempts[peer_id] = 0  # 重置重连计数
-                logger.info(f"Peer {peer_id} connected")
-                
-                # 启动心跳检测
-                asyncio.create_task(self.heartbeat(peer_id, websocket))
-                
-                # 发送队列中的消息
-                if peer_id in self.message_queues:
-                    while self.message_queues[peer_id]:
-                        message = self.message_queues[peer_id].popleft()
-                        await self.send_message_to_peer(peer_id, message)
-                
-                # 开始接收消息
-                while True:
-                    message = await websocket.recv()
-                    await self.handle_message(json.loads(message))
         
-        except websockets.exceptions.ConnectionClosed:
-            await self.handle_peer_disconnect(peer_id)
-        except Exception as e:
-            logger.error(f"Error handling connection: {e}")
-            await self.handle_peer_disconnect(peer_id)
-    
-    async def heartbeat(self, peer_id, websocket):
-        """发送心跳包"""
-        while self.running and peer_id in self.connected_peers:
-            try:
-                await websocket.ping()
-                await asyncio.sleep(self.HEARTBEAT_INTERVAL)
-            except:
-                await self.handle_peer_disconnect(peer_id)
-                break
-    
-    async def handle_peer_disconnect(self, peer_id):
-        """处理对等节点断开连接"""
-        if peer_id in self.connected_peers:
-            del self.connected_peers[peer_id]
-            logger.info(f"Peer {peer_id} disconnected")
-            
-            # 尝试重连
-            if peer_id in self.reconnect_attempts and self.reconnect_attempts[peer_id] < self.MAX_RECONNECT_ATTEMPTS:
-                self.reconnect_attempts[peer_id] += 1
-                logger.info(f"Attempting to reconnect to peer {peer_id} (attempt {self.reconnect_attempts[peer_id]})")
-                asyncio.create_task(self.reconnect_to_peer(peer_id))
-    
-    async def reconnect_to_peer(self, peer_id):
-        """重新连接到对等节点"""
-        try:
-            active_nodes = self.discovery.get_active_nodes()
-            if peer_id in active_nodes:
-                node_info = active_nodes[peer_id]
-                await self.connect_to_peer(peer_id, node_info['ip'], node_info['port'])
-        except Exception as e:
-            logger.error(f"Failed to reconnect to peer {peer_id}: {e}")
-    
-    async def send_message_to_peer(self, peer_id, message):
-        """发送消息到指定对等节点"""
-        try:
-            if peer_id in self.connected_peers:
-                websocket = self.connected_peers[peer_id]
-                await websocket.send(json.dumps(message))
-                logger.info(f"Message sent to peer {peer_id}")
-                return True
-            else:
-                # 将消息加入队列
-                if peer_id not in self.message_queues:
-                    self.message_queues[peer_id] = deque()
-                self.message_queues[peer_id].append(message)
-                logger.info(f"Message queued for peer {peer_id}")
-                return False
-        except Exception as e:
-            logger.error(f"Error sending message to peer {peer_id}: {e}")
-            await self.handle_peer_disconnect(peer_id)
-            return False
-    
-    async def connect_to_peer(self, peer_id, host, port):
-        """连接到对等节点"""
-        try:
-            ws_url = f"ws://{host}:{port}/ws"
-            websocket = await websockets.connect(ws_url)
-            
-            # 发送身份验证信息
-            auth_message = {
-                "type": "auth",
-                "user_id": self.user_id,
-                "username": self.username
-            }
-            await websocket.send(json.dumps(auth_message))
-            
-            self.connected_peers[peer_id] = websocket
-            logger.info(f"Connected to peer {peer_id}")
-            
-            # 启动心跳检测
-            asyncio.create_task(self.heartbeat(peer_id, websocket))
-            
-            # 发送队列中的消息
-            if peer_id in self.message_queues:
-                while self.message_queues[peer_id]:
-                    message = self.message_queues[peer_id].popleft()
-                    await self.send_message_to_peer(peer_id, message)
-            
-            # 开始接收消息
-            while True:
-                message = await websocket.recv()
-                await self.handle_message(json.loads(message))
-        
-        except Exception as e:
-            logger.error(f"Error connecting to peer {peer_id}: {e}")
-            await self.handle_peer_disconnect(peer_id)
-    
     async def start(self, user_id, username=None):
-        """启动P2P节点"""
-        try:
-            self.user_id = user_id
-            if username:
-                self.username = username
-            else:
-                # 如果没有提供用户名，从数据库获取
-                from .database import get_user_by_id
-                user = get_user_by_id(user_id)
-                self.username = user.username if user else f"User {user_id}"
-            
-            self.running = True
-            
-            # 启动WebSocket服务器
-            await self.start_server()
-            
-            # 启动节点发现服务
-            await self.discovery.start(user_id)
-            
-            # 发出连接成功信号
-            self.connection_status_changed.emit(True)
-            
-            # 定期检查和连接新发现的节点
-            while self.running:
-                try:
-                    active_nodes = self.discovery.get_active_nodes()
-                    for node_id, info in active_nodes.items():
-                        if node_id not in self.connected_peers:
-                            asyncio.create_task(
-                                self.connect_to_peer(node_id, info['ip'], info['port'])
-                            )
-                except Exception as e:
-                    logger.error(f"Error checking for new nodes: {e}")
-                await asyncio.sleep(30)  # 每30秒检查一次
+        """启动网络管理器"""
+        self.user_id = user_id
+        self.username = username
+        print(f"Starting network manager for user {user_id} ({username})")
+        await self.check_undelivered_messages()
         
-        except Exception as e:
-            logger.error(f"Error starting network manager: {e}")
-            self.connection_status_changed.emit(False)
-            raise
-    
-    async def stop(self):
-        """停止P2P节点"""
-        self.running = False
-        
-        # 关闭所有对等连接
-        for peer_id, websocket in list(self.connected_peers.items()):
-            try:
-                await websocket.close()
-                logger.info(f"Closed connection to peer {peer_id}")
-            except Exception as e:
-                logger.error(f"Error closing connection to peer {peer_id}: {e}")
-        self.connected_peers.clear()
-        
-        # 停止服务器
-        if self.server:
-            self.server.close()
-            await self.server.wait_closed()
-            logger.info("WebSocket server stopped")
-        
-        # 停止节点发现服务
-        await self.discovery.stop()
-        logger.info("Node discovery service stopped")
-        
-        # 发出断开连接信号
-        self.connection_status_changed.emit(False)
-    
-    # 添加 disconnect 方法作为 stop 的别名
-    async def disconnect(self):
-        """停止P2P节点（stop的别名）"""
-        await self.stop()
-    
-    async def send_message(self, message_data):
-        """发送消息到指定节点"""
-        recipient_id = str(message_data.get('recipient_id'))
-        message_data['timestamp'] = datetime.utcnow().isoformat()
-        
-        success = await self.send_message_to_peer(recipient_id, message_data)
-        if not success:
-            logger.warning(f"Message to peer {recipient_id} queued for later delivery")
-    
-    async def handle_message(self, message):
-        """处理接收到的消息"""
-        try:
-            logger.info(f"Received message: {message.get('type')}")
-            
-            # 根据消息类型处理
-            message_type = message.get("type")
-            if message_type == "message":
-                self.message_received.emit(message)
-            elif message_type == "friend_request":
-                self.friend_request_received.emit(message)
-            elif message_type == "friend_response":
-                self.friend_response_received.emit(message)
-            else:
-                logger.warning(f"Unknown message type: {message_type}")
-        
-        except Exception as e:
-            logger.error(f"Error handling message: {e}")
-    
     async def send_friend_request(self, recipient_id, request_id):
         """发送好友请求"""
         try:
             message = {
                 "type": "friend_request",
+                "request_id": request_id,
                 "sender_id": self.user_id,
-                "sender_username": self.username,
-                "recipient_id": recipient_id,
-                "id": request_id,
-                "timestamp": datetime.utcnow().isoformat()
+                "sender_username": self.username
             }
-            success = await self.send_message_to_peer(recipient_id, message)
-            return success
+            await self.send_message_to_peer(recipient_id, message)
+            return True
         except Exception as e:
-            logger.error(f"Error sending friend request: {e}")
+            print(f"Error sending friend request: {e}")
             return False
-    
-    async def send_friend_response(self, request_id, recipient_id, accepted):
+            
+    async def send_friend_response(self, request_id, sender_id, accepted):
         """发送好友请求响应"""
         try:
             message = {
                 "type": "friend_response",
-                "sender_id": self.user_id,
-                "sender_username": self.username,
-                "recipient_id": recipient_id,
                 "request_id": request_id,
-                "accepted": accepted,
-                "timestamp": datetime.utcnow().isoformat()
+                "sender_id": sender_id,
+                "recipient_id": self.user_id,
+                "recipient_username": self.username,
+                "accepted": accepted
             }
-            success = await self.send_message_to_peer(recipient_id, message)
-            return success
+            await self.send_message_to_peer(sender_id, message)
+            return True
         except Exception as e:
-            logger.error(f"Error sending friend response: {e}")
+            print(f"Error sending friend response: {e}")
+            return False
+            
+    async def handle_message(self, message):
+        """处理接收到的消息"""
+        try:
+            if message["type"] == "friend_request":
+                print(f"Received friend request: {message}")
+                self.friend_request_received.emit({
+                    "id": message["request_id"],
+                    "sender_id": message["sender_id"],
+                    "sender_username": message["sender_username"]
+                })
+            elif message["type"] == "friend_response":
+                print(f"Received friend response: {message}")
+                self.friend_response_received.emit({
+                    "request_id": message["request_id"],
+                    "recipient_id": message["recipient_id"],
+                    "recipient_username": message["recipient_username"],
+                    "accepted": message["accepted"]
+                })
+            elif message["type"] == "message":
+                try:
+                    # 解密消息
+                    encrypted_data = {
+                        "message": message["content"],
+                        "key": message["key"]  # 使用消息中的加密密钥
+                    }
+                    decrypted_content = decrypt_message(encrypted_data, self.user_id)
+                    print(f"Decrypted message content: {decrypted_content}")
+                    
+                    # 保存解密后的消息到数据库
+                    received_message = save_message(
+                        sender_id=message["sender_id"],
+                        recipient_id=self.user_id,
+                        content=decrypted_content,  # 保存解密后的内容
+                        timestamp=datetime.fromisoformat(message["timestamp"]) if "timestamp" in message else None
+                    )
+                    print(f"Received message saved to database: {received_message}")
+                    
+                    # 发送解密后的消息到UI
+                    message["content"] = decrypted_content
+                    self.message_received.emit(message)
+                    
+                    # 标记消息为已发送
+                    mark_message_as_delivered(received_message['id'])
+                except Exception as e:
+                    print(f"Error processing message: {e}")
+                    print(f"Message data: {message}")
+            else:
+                print(f"Unknown message type: {message['type']}")
+        except Exception as e:
+            print(f"Error handling message: {e}")
+            
+    async def check_undelivered_messages(self):
+        """检查未发送的消息"""
+        try:
+            messages = get_undelivered_messages(self.user_id)
+            print(f"Found {len(messages)} undelivered messages for user {self.user_id}")
+            for msg in messages:
+                sender = get_user_by_id(msg['sender_id'])
+                if sender:
+                    print(f"Processing message from {sender.username}")
+                    try:
+                        # 解密消息
+                        if msg.get('key'):  # 如果有加密密钥
+                            encrypted_data = {
+                                "message": msg['content'],
+                                "key": msg['key']
+                            }
+                            decrypted_content = decrypt_message(encrypted_data, self.user_id)
+                            print(f"Decrypted message: {decrypted_content}")
+                        else:
+                            print("Warning: No encryption key found, using raw content")
+                            decrypted_content = msg['content']
+                        
+                        # 将消息标记为已发送
+                        mark_message_as_delivered(msg['id'])
+                        
+                        # 通知UI显示消息
+                        self.message_received.emit({
+                            'type': 'message',
+                            'sender_id': msg['sender_id'],
+                            'content': decrypted_content,
+                            'timestamp': msg['timestamp']
+                        })
+                    except Exception as e:
+                        print(f"Error processing message: {e}")
+                        print(f"Message data: {msg}")
+        except Exception as e:
+            print(f"Error checking undelivered messages: {e}")
+            
+    async def connect_to_peer(self, peer_id, peer_address):
+        """连接到对等节点"""
+        if peer_id in self.connected_peers:
+            return
+            
+        try:
+            websocket = await websockets.connect(f"ws://{peer_address}/ws")
+            self.connected_peers[peer_id] = websocket
+            
+            # 发送身份验证信息
+            auth_data = {
+                "type": "auth",
+                "user_id": self.user_id,
+                "username": self.username
+            }
+            await websocket.send(json.dumps(auth_data))
+            
+            # 启动心跳检测
+            self.heartbeat_tasks[peer_id] = asyncio.create_task(self.heartbeat_check(peer_id))
+            
+            # 检查是否有未发送的消息
+            if peer_id in self.message_queue:
+                for msg in self.message_queue[peer_id]:
+                    await self.send_message_to_peer(peer_id, msg)
+                del self.message_queue[peer_id]
+                
+        except Exception as e:
+            print(f"Error connecting to peer {peer_id}: {e}")
+            if peer_id in self.reconnect_attempts:
+                self.reconnect_attempts[peer_id] += 1
+            else:
+                self.reconnect_attempts[peer_id] = 1
+                
+            if self.reconnect_attempts[peer_id] < self.max_reconnect_attempts:
+                print(f"Attempting to reconnect to peer {peer_id}...")
+                await asyncio.sleep(5)  # 等待5秒后重试
+                await self.connect_to_peer(peer_id, peer_address)
+            else:
+                print(f"Max reconnection attempts reached for peer {peer_id}")
+                
+    async def send_message_to_peer(self, peer_id, message):
+        """发送消息到对等节点"""
+        if peer_id not in self.connected_peers:
+            print(f"Peer {peer_id} not connected, queueing message")
+            if peer_id not in self.message_queue:
+                self.message_queue[peer_id] = []
+            self.message_queue[peer_id].append(message)
+            return
+            
+        try:
+            websocket = self.connected_peers[peer_id]
+            await websocket.send(json.dumps(message))
+            print(f"Message sent to peer {peer_id}")
+        except Exception as e:
+            print(f"Error sending message to peer {peer_id}: {e}")
+            # 将消息加入队列
+            if peer_id not in self.message_queue:
+                self.message_queue[peer_id] = []
+            self.message_queue[peer_id].append(message)
+            # 关闭连接并尝试重连
+            await self.close_peer_connection(peer_id)
+            
+    async def close_peer_connection(self, peer_id):
+        """关闭与对等节点的连接"""
+        if peer_id in self.connected_peers:
+            try:
+                await self.connected_peers[peer_id].close()
+            except Exception as e:
+                print(f"Error closing connection to peer {peer_id}: {e}")
+            finally:
+                del self.connected_peers[peer_id]
+                if peer_id in self.heartbeat_tasks:
+                    self.heartbeat_tasks[peer_id].cancel()
+                    del self.heartbeat_tasks[peer_id]
+                    
+    async def heartbeat_check(self, peer_id):
+        """心跳检测"""
+        while True:
+            try:
+                if peer_id not in self.connected_peers:
+                    break
+                    
+                current_time = datetime.utcnow()
+                if peer_id in self.last_heartbeat:
+                    time_diff = (current_time - self.last_heartbeat[peer_id]).total_seconds()
+                    if time_diff > self.heartbeat_interval * 2:
+                        print(f"Peer {peer_id} heartbeat timeout")
+                        await self.close_peer_connection(peer_id)
+                        break
+                        
+                # 发送心跳
+                await self.send_message_to_peer(peer_id, {"type": "heartbeat"})
+                self.last_heartbeat[peer_id] = current_time
+                
+                await asyncio.sleep(self.heartbeat_interval)
+            except Exception as e:
+                print(f"Error in heartbeat check for peer {peer_id}: {e}")
+                break
+                
+    def set_message_callback(self, callback):
+        """设置消息回调函数"""
+        self.message_callback = callback
+
+    async def stop(self):
+        """停止网络管理器"""
+        try:
+            print("\n=== 开始停止网络管理器 ===")
+            
+            # 停止所有心跳检查任务
+            print(f"1. 正在停止 {len(self.heartbeat_tasks)} 个心跳检测任务...")
+            for task in self.heartbeat_tasks.values():
+                task.cancel()
+            print("2. 心跳检测任务已停止")
+            
+            # 关闭所有连接
+            print(f"3. 正在关闭 {len(self.connected_peers)} 个对等连接...")
+            for peer_id, websocket in self.connected_peers.items():
+                try:
+                    print(f"   - 正在关闭与节点 {peer_id} 的连接...")
+                    await websocket.close()
+                    print(f"   - 节点 {peer_id} 连接已关闭")
+                except Exception as e:
+                    print(f"   - 关闭节点 {peer_id} 连接时出错: {e}")
+            
+            print("4. 正在清理资源...")
+            self.connected_peers.clear()
+            self.heartbeat_tasks.clear()
+            self.message_queue.clear()
+            self.last_heartbeat.clear()
+            
+            print("=== 网络管理器停止完成 ===\n")
+            
+        except Exception as e:
+            print(f"\n!!! 停止网络管理器时出错 !!!")
+            print(f"错误详情: {str(e)}")
+            print(f"错误类型: {type(e).__name__}\n")
+
+    async def send_message(self, message_data):
+        """发送消息"""
+        try:
+            recipient_id = message_data['recipient_id']
+            content = message_data['content']
+            
+            # 加密消息
+            encrypted_data = encrypt_message(content, recipient_id)
+            message_data['content'] = encrypted_data['message']
+            message_data['key'] = encrypted_data['key']
+            
+            # 保存原始消息到数据库
+            message = save_message(
+                sender_id=self.user_id,
+                recipient_id=recipient_id,
+                content=encrypted_data['message'],  # 保存加密后的内容
+                encryption_key=encrypted_data['key'],  # 保存加密密钥
+                timestamp=datetime.utcnow()
+            )
+            print(f"Message saved to database: {message}")
+            
+            if recipient_id in self.connected_peers:
+                # 如果对方在线，直接发送
+                await self.connected_peers[recipient_id].send(json.dumps(message_data))
+                print(f"Message sent to peer {recipient_id}")
+                # 标记消息为已发送
+                mark_message_as_delivered(message['id'])
+            else:
+                # 如果对方不在线，将消息加入队列
+                print(f"Peer {recipient_id} not connected, message will be delivered when they come online")
+                if recipient_id not in self.message_queue:
+                    self.message_queue[recipient_id] = []
+                self.message_queue[recipient_id].append(message_data)
+            return True
+        except Exception as e:
+            print(f"Error sending message: {e}")
             return False
 
-# 创建全局 NetworkManager 实例
 network_manager = NetworkManager() 

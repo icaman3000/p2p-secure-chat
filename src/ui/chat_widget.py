@@ -48,7 +48,7 @@ class ChatWidget(QWidget):
         
         try:
             # 获取当前时间戳
-            timestamp = datetime.utcnow().isoformat()
+            timestamp = datetime.utcnow()
             
             # 加密消息
             encrypted_data = encrypt_message(message, self.contact_id)
@@ -57,7 +57,8 @@ class ChatWidget(QWidget):
             save_message(
                 sender_id=network_manager.user_id,
                 recipient_id=self.contact_id,
-                content=encrypted_data,
+                content=encrypted_data['message'],  # 保存加密后的消息内容
+                encryption_key=encrypted_data['key'],  # 保存加密密钥
                 timestamp=timestamp
             )
             
@@ -66,17 +67,20 @@ class ChatWidget(QWidget):
                 "type": "message",
                 "sender_id": network_manager.user_id,
                 "recipient_id": self.contact_id,
-                "content": encrypted_data,
-                "timestamp": timestamp
+                "content": encrypted_data['message'],
+                "key": encrypted_data['key'],
+                "timestamp": timestamp.isoformat()
             }))
             
             # 显示发送的消息
-            formatted_message = self.format_message("Me", message, timestamp)
+            formatted_message = self.format_message("Me", message, timestamp.isoformat())
             self.chat_display.append(formatted_message)
             self.message_input.clear()
             
         except Exception as e:
             print(f"Send message error: {str(e)}")
+            if hasattr(e, '__cause__'):
+                print(f"Caused by: {e.__cause__}")
     
     async def _send_message_async(self, message_data):
         """异步发送消息"""
@@ -89,30 +93,22 @@ class ChatWidget(QWidget):
         try:
             print(f"Receiving message in chat widget: {message}")  # 调试信息
             
-            # 解密消息
-            decrypted_message = message["content"]  # 消息已经在 NetworkManager 中解密
-            
             # 获取发送者信息
             sender_id = message['sender_id']
             sender = get_user_by_id(sender_id)
             sender_name = sender.username if sender else f"User {sender_id}"
             
-            # 保存接收到的消息
-            save_message(
-                sender_id=sender_id,
-                recipient_id=network_manager.user_id,
-                content={"message": decrypted_message},  # 已解密的消息不需要再加密
-                timestamp=message.get("timestamp")
-            )
+            # 解析时间戳
+            timestamp = datetime.fromisoformat(message.get("timestamp")) if message.get("timestamp") else datetime.utcnow()
             
             # 显示接收到的消息
             formatted_message = self.format_message(
                 sender_name,
-                decrypted_message,
-                message.get("timestamp")
+                message['content'],  # 消息已经在NetworkManager中解密
+                timestamp.isoformat()
             )
             self.chat_display.append(formatted_message)
             
         except Exception as e:
             print(f"Error displaying message: {str(e)}")
-            print(f"Message data: {message}")  # 打印完整的消息数据以便调试 
+            print(f"Message data: {message}") 
