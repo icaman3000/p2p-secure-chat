@@ -6,6 +6,7 @@ from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from src.utils.crypto import generate_keypair
+from sqlalchemy import or_, and_
 
 # 创建数据目录
 data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data')
@@ -526,6 +527,33 @@ def mark_messages_as_read(recipient_id, sender_id):
         return False
     finally:
         session.close()
+
+def get_messages_between_users(user1_id, user2_id):
+    """获取两个用户之间的所有消息"""
+    try:
+        with Session() as session:
+            messages = session.query(Message).filter(
+                or_(
+                    and_(Message.sender_id == user1_id, Message.recipient_id == user2_id),
+                    and_(Message.sender_id == user2_id, Message.recipient_id == user1_id)
+                )
+            ).order_by(Message.timestamp).all()
+            
+            return [
+                {
+                    'id': msg.id,
+                    'sender_id': msg.sender_id,
+                    'recipient_id': msg.recipient_id,
+                    'content': msg.content,
+                    'encryption_key': msg.encryption_key,
+                    'timestamp': msg.timestamp,
+                    'is_delivered': msg.is_delivered
+                }
+                for msg in messages
+            ]
+    except Exception as e:
+        print(f"Error getting messages between users: {e}")
+        return []
 
 if __name__ == "__main__":
     # 检查用户 222 的数据库状态
