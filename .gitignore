@@ -42,4 +42,8 @@ ENV/
 .env.production.local
 
 # macOS
-.DS_Store 
+.DS_Store
+
+# Project specific
+data/
+*.db 

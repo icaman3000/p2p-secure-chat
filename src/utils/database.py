@@ -15,9 +15,33 @@ if not os.path.exists(data_dir):
 
 Base = declarative_base()
 
-# 全局变量存储当前用户的数据库连接
+# 全局变量存储系统数据库连接和当前用户的数据库连接
+system_engine = None
+system_session = None
 current_engine = None
 current_session = None
+
+def init_system_database():
+    """初始化系统数据库"""
+    global system_engine, system_session
+    
+    # 创建系统数据目录
+    system_dir = os.path.join(data_dir, 'system')
+    os.makedirs(system_dir, exist_ok=True)
+    
+    # 创建系统数据库
+    db_path = os.path.join(system_dir, 'system.db')
+    system_engine = create_engine(f'sqlite:///{db_path}')
+    
+    # 创建数据库表
+    Base.metadata.create_all(system_engine)
+    
+    # 创建会话
+    Session = sessionmaker(bind=system_engine)
+    system_session = Session()
+    
+    print("Initialized system database")
+    return system_session
 
 def init_database(user_id):
     """初始化指定用户的数据库"""
@@ -43,9 +67,9 @@ def init_database(user_id):
 
 def get_session():
     """获取当前用户的数据库会话"""
-    if current_session is None:
-        raise RuntimeError("Database not initialized. Call init_database first.")
-    return current_session
+    if system_session is None:
+        init_system_database()
+    return system_session
 
 class User(Base):
     __tablename__ = 'users'
@@ -97,22 +121,19 @@ class Message(Base):
     )
 
 class FriendRequest(Base):
+    """好友请求模型"""
     __tablename__ = 'friend_requests'
     
     id = Column(Integer, primary_key=True)
-    sender_id = Column(Integer, ForeignKey('users.id'))  # 添加外键约束
-    sender_username = Column(String)  # 存储发送者用户名
-    recipient_id = Column(Integer, ForeignKey('users.id'))  # 添加外键约束
+    sender_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    recipient_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     status = Column(String, default='pending')  # pending, accepted, rejected
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now)
+    processed_at = Column(DateTime, nullable=True)
     
-    # 定义与User表的关系
+    # 关系
     sender = relationship('User', foreign_keys=[sender_id], back_populates='sent_friend_requests')
     recipient = relationship('User', foreign_keys=[recipient_id], back_populates='received_friend_requests')
-    
-    __table_args__ = (
-        UniqueConstraint('sender_id', 'recipient_id', name='uq_sender_recipient'),
-    )
 
 def register_user(username, password):
     """注册新用户"""
@@ -236,10 +257,10 @@ def handle_friend_request(request_id, user_id, accepted):
         session.rollback()
         raise e
 
-def get_pending_friend_requests(user_id):
-    """获取待处理的好友请求"""
-    session = get_session()
+def get_pending_friend_requests(user_id: int) -> list:
+    """获取用户的待处理好友请求"""
     try:
+        session = get_session()
         requests = session.query(FriendRequest).filter(
             FriendRequest.recipient_id == user_id,
             FriendRequest.status == 'pending'
@@ -247,17 +268,79 @@ def get_pending_friend_requests(user_id):
         
         result = []
         for request in requests:
-            sender = session.query(User).filter_by(id=request.sender_id).first()
+            sender = session.query(User).filter(User.id == request.sender_id).first()
             if sender:
                 result.append({
                     'id': request.id,
                     'sender_id': sender.id,
                     'sender_username': sender.username,
-                    'created_at': request.created_at.isoformat()
+                    'created_at': request.created_at.strftime('%Y-%m-%d %H:%M:%S')
                 })
         return result
+    except Exception as e:
+        logger.error(f"Error getting pending friend requests: {e}")
+        return []
     finally:
-        pass
+        session.close()
+
+def process_friend_request(request_id: int, accept: bool) -> tuple[bool, str]:
+    """处理好友请求
+    
+    Args:
+        request_id: 好友请求ID
+        accept: 是否接受请求
+        
+    Returns:
+        (success, message): 处理结果和消息
+    """
+    try:
+        session = get_session()
+        request = session.query(FriendRequest).filter(FriendRequest.id == request_id).first()
+        
+        if not request:
+            return False, "Friend request not found"
+            
+        if request.status != 'pending':
+            return False, "Friend request already processed"
+            
+        # 更新请求状态
+        request.status = 'accepted' if accept else 'rejected'
+        request.processed_at = datetime.now()
+        
+        # 如果接受请求，添加好友关系
+        if accept:
+            # 检查是否已经是好友
+            existing = session.query(Contact).filter(
+                ((Contact.user_id == request.sender_id) & (Contact.contact_id == request.recipient_id)) |
+                ((Contact.user_id == request.recipient_id) & (Contact.contact_id == request.sender_id))
+            ).first()
+            
+            if existing:
+                return False, "Already friends"
+                
+            # 添加双向好友关系
+            contact1 = Contact(
+                user_id=request.sender_id,
+                contact_id=request.recipient_id,
+                created_at=datetime.now()
+            )
+            contact2 = Contact(
+                user_id=request.recipient_id,
+                contact_id=request.sender_id,
+                created_at=datetime.now()
+            )
+            session.add(contact1)
+            session.add(contact2)
+            
+        session.commit()
+        return True, "Success"
+        
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error processing friend request: {e}")
+        return False, str(e)
+    finally:
+        session.close()
 
 def save_message(sender_id, recipient_id, content, timestamp=None, encryption_key=None):
     """保存消息到数据库"""
@@ -545,6 +628,165 @@ def get_user_by_username(username):
     except Exception as e:
         print(f"获取用户信息失败: {str(e)}")
         return None
+
+def add_friend(user_id: int, friend_id: int, friend_username: str):
+    """添加好友关系"""
+    session = get_session()
+    try:
+        # 检查是否已经是好友
+        existing = session.query(Contact).filter_by(
+            user_id=user_id,
+            contact_id=friend_id
+        ).first()
+        
+        if existing:
+            return False, "Already friends"
+            
+        # 创建新的好友关系
+        new_contact = Contact(
+            user_id=user_id,
+            contact_id=friend_id,
+            contact_username=friend_username
+        )
+        session.add(new_contact)
+        session.commit()
+        return True, "Friend added successfully"
+        
+    except Exception as e:
+        session.rollback()
+        return False, str(e)
+        
+def remove_friend(user_id: int, friend_id: int):
+    """删除好友关系"""
+    session = get_session()
+    try:
+        # 删除好友关系
+        contact = session.query(Contact).filter_by(
+            user_id=user_id,
+            contact_id=friend_id
+        ).first()
+        
+        if contact:
+            session.delete(contact)
+            session.commit()
+            return True, "Friend removed successfully"
+        else:
+            return False, "Friend not found"
+            
+    except Exception as e:
+        session.rollback()
+        return False, str(e)
+        
+def get_friend_list(user_id: int):
+    """获取好友列表"""
+    session = get_session()
+    try:
+        contacts = session.query(Contact).filter_by(user_id=user_id).all()
+        return [
+            {
+                'id': contact.contact_id,
+                'username': contact.contact_username
+            }
+            for contact in contacts
+        ]
+    except Exception as e:
+        return []
+
+def save_friend_request(sender_id: int, sender_username: str, recipient_id: int):
+    """保存好友请求"""
+    session = get_session()
+    try:
+        # 检查是否已经存在相同的请求
+        existing = session.query(FriendRequest).filter_by(
+            sender_id=sender_id,
+            recipient_id=recipient_id,
+            status='pending'
+        ).first()
+        
+        if existing:
+            return False, "Friend request already exists"
+            
+        # 检查是否已经是好友
+        existing_contact = session.query(Contact).filter_by(
+            user_id=sender_id,
+            contact_id=recipient_id
+        ).first()
+        
+        if existing_contact:
+            return False, "Already friends"
+            
+        # 创建新的好友请求
+        new_request = FriendRequest(
+            sender_id=sender_id,
+            sender_username=sender_username,
+            recipient_id=recipient_id,
+            status='pending'
+        )
+        session.add(new_request)
+        session.commit()
+        return True, "Friend request sent successfully"
+        
+    except Exception as e:
+        session.rollback()
+        return False, str(e)
+        
+def get_pending_friend_requests(user_id: int):
+    """获取用户的待处理好友请求"""
+    session = get_session()
+    try:
+        requests = session.query(FriendRequest).filter_by(
+            recipient_id=user_id,
+            status='pending'
+        ).all()
+        
+        return [
+            {
+                'id': req.id,
+                'sender_id': req.sender_id,
+                'sender_username': req.sender_username,
+                'created_at': req.created_at
+            }
+            for req in requests
+        ]
+    except Exception as e:
+        print(f"Error getting pending friend requests: {e}")
+        return []
+        
+def process_friend_request(request_id: int, accepted: bool):
+    """处理好友请求"""
+    session = get_session()
+    try:
+        request = session.query(FriendRequest).filter_by(id=request_id).first()
+        if not request:
+            return False, "Friend request not found"
+            
+        request.status = 'accepted' if accepted else 'rejected'
+        request.processed_at = datetime.utcnow()
+        
+        if accepted:
+            # 添加好友关系（双向）
+            success1, msg1 = add_friend(
+                request.recipient_id,
+                request.sender_id,
+                request.sender_username
+            )
+            
+            success2, msg2 = add_friend(
+                request.sender_id,
+                request.recipient_id,
+                get_user_by_id(request.recipient_id)['username']
+            )
+            
+            if not (success1 and success2):
+                session.rollback()
+                return False, f"Failed to add friend: {msg1 or msg2}"
+                
+        session.commit()
+        return True, "Friend request processed successfully"
+        
+    except Exception as e:
+        session.rollback()
+        return False, str(e)
 
 if __name__ == "__main__":
     # 检查用户 222 的数据库状态

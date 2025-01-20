@@ -4,7 +4,9 @@ import socket
 import json
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
+from PyQt6.QtCore import QObject, pyqtSignal
 from .stun_client import StunClient
+from datetime import datetime
 
 @dataclass
 class PeerInfo:
@@ -14,10 +16,14 @@ class PeerInfo:
     public_addr: Optional[Tuple[str, int]] = None
     connection: Optional[asyncio.StreamWriter] = None
 
-class ConnectionManager:
+class ConnectionManager(QObject):
     """连接管理器 - 专注于安全的点对点通信"""
     
+    # 定义信号
+    network_info_updated = pyqtSignal(dict)
+    
     def __init__(self):
+        super().__init__()
         # STUN 服务器列表 - 使用可靠的公共 STUN 服务器
         self.stun_servers = [
             "stun.voip.blackberry.com:3478",  # Blackberry
@@ -35,9 +41,30 @@ class ConnectionManager:
         self.max_reconnect_attempts = 3  # 最大重连次数
         self.reconnect_delay = 2.0  # 重连延迟（秒）
         
+        # 用户信息
+        self.user_id = None
+        self.username = None
+        
+        # 网络信息
+        self.network_info = {
+            'local_ip': None,
+            'public_ip': None,
+            'stun_results': []
+        }
+        
+    def set_user_info(self, user_id: int, username: str):
+        """设置用户信息"""
+        self.user_id = user_id
+        self.username = username
+        
     def set_message_handler(self, handler):
         """设置消息处理回调函数"""
         self.message_handler = handler
+        
+    def _update_network_info(self, **kwargs):
+        """更新网络信息并发出信号"""
+        self.network_info.update(kwargs)
+        self.network_info_updated.emit(self.network_info)
         
     async def start(self, port: int = 0) -> None:
         """启动连接管理器"""
@@ -49,6 +76,10 @@ class ConnectionManager:
                 port=port
             )
             self.local_port = self.server.sockets[0].getsockname()[1]
+            
+            # 获取本地IP
+            local_ip = socket.gethostbyname(socket.gethostname())
+            self._update_network_info(local_ip=local_ip)
             logging.info(f"本地服务器启动在端口 {self.local_port}")
             
             # 获取 STUN 绑定信息
@@ -61,6 +92,8 @@ class ConnectionManager:
     async def _get_stun_bindings(self) -> None:
         """获取 STUN 绑定信息"""
         successful_bindings = 0
+        stun_results = []
+        
         for server in self.stun_servers:
             try:
                 host, port = server.split(":")
@@ -73,8 +106,16 @@ class ConnectionManager:
                     binding = await client.get_binding()
                     if binding:
                         self.stun_results.append(binding)
+                        stun_results.append(binding)
                         successful_bindings += 1
                         logging.info(f"STUN 绑定成功: {binding}")
+                        
+                        # 更新网络信息
+                        if 'mapped_address' in binding:
+                            self._update_network_info(
+                                public_ip=binding['mapped_address'][0],
+                                stun_results=stun_results
+                            )
                         
                         # 如果已经有两个成功的绑定，提前退出
                         if successful_bindings >= 2:
@@ -222,11 +263,19 @@ class ConnectionManager:
     async def send_message(self, peer_id: str, message: dict) -> bool:
         """发送消息到指定对等端"""
         try:
+            # 检查是否已经连接
             peer = self.peers.get(peer_id)
-            if not peer or not peer.connection:
-                logging.warning(f"对等端 {peer_id} 未连接")
-                return False
-                
+            if not peer or not peer.connection or peer.connection.is_closing():
+                # 尝试建立连接
+                if not await self._establish_connection(peer_id):
+                    logging.warning(f"对等端 {peer_id} 未连接")
+                    return False
+                    
+                # 重新获取对等端信息
+                peer = self.peers.get(peer_id)
+                if not peer or not peer.connection:
+                    return False
+                    
             if peer.connection.is_closing():
                 logging.warning(f"对等端 {peer_id} 连接已关闭")
                 return False
@@ -244,6 +293,61 @@ class ConnectionManager:
                 peer = self.peers.pop(peer_id)
                 if peer.local_addr:
                     self._start_reconnect_task(peer_id, peer.local_addr)
+            return False
+            
+    async def _establish_connection(self, peer_id: str) -> bool:
+        """建立与对等端的连接"""
+        try:
+            # 尝试直接连接
+            for port in range(8000, 9000):
+                try:
+                    reader, writer = await asyncio.wait_for(
+                        asyncio.open_connection('127.0.0.1', port),
+                        timeout=0.5
+                    )
+                    
+                    # 发送身份验证消息
+                    auth_message = {
+                        "type": "auth",
+                        "peer_id": self.user_id,
+                        "username": self.username,
+                        "timestamp": datetime.now().timestamp()
+                    }
+                    
+                    data = json.dumps(auth_message).encode() + b'\n'
+                    writer.write(data)
+                    await writer.drain()
+                    
+                    # 等待身份验证回复
+                    try:
+                        data = await asyncio.wait_for(
+                            reader.readuntil(b'\n'),
+                            timeout=2.0
+                        )
+                        response = json.loads(data.decode().strip())
+                        
+                        if response.get("type") == "auth_reply":
+                            # 保存连接信息
+                            self.peers[peer_id] = PeerInfo(
+                                id=peer_id,
+                                local_addr=('127.0.0.1', port),
+                                connection=writer
+                            )
+                            logging.info(f"与对等端 {peer_id} 建立连接成功")
+                            return True
+                            
+                    except asyncio.TimeoutError:
+                        writer.close()
+                        continue
+                        
+                except (ConnectionRefusedError, asyncio.TimeoutError):
+                    continue
+                    
+            logging.warning(f"无法与对等端 {peer_id} 建立连接")
+            return False
+            
+        except Exception as e:
+            logging.error(f"建立连接失败: {e}")
             return False
             
     async def stop(self):

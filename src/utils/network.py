@@ -16,194 +16,6 @@ import logging
 from typing import Dict, List, Optional, Tuple, Any
 import socket
 
-# 尝试导入 miniupnpc，如果不可用则尝试使用系统库
-try:
-    import miniupnpc
-    UPNP_AVAILABLE = True
-    print("UPnP support is available (Python package)")
-except ImportError:
-    try:
-        # 尝试使用系统安装的 miniupnpc
-        import ctypes
-        import os
-        
-        # 在不同的路径尝试加载库
-        lib_paths = [
-            '/opt/homebrew/lib/libminiupnpc.dylib',  # Homebrew ARM64
-            '/usr/local/lib/libminiupnpc.dylib',     # Homebrew Intel
-            '/usr/lib/libminiupnpc.dylib',           # System
-        ]
-        
-        class MiniUPnPc:
-            def __init__(self, lib_path):
-                self.lib = ctypes.CDLL(lib_path)
-                
-                # 设置函数参数和返回类型
-                self.lib.upnpDiscover.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int]
-                self.lib.upnpDiscover.restype = ctypes.c_void_p
-                
-                self.lib.UPNP_GetValidIGD.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
-                self.lib.UPNP_GetValidIGD.restype = ctypes.c_int
-                
-                self.lib.UPNP_GetExternalIPAddress.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-                self.lib.UPNP_GetExternalIPAddress.restype = ctypes.c_int
-                
-                self.lib.UPNP_AddPortMapping.argtypes = [
-                    ctypes.c_void_p,    # urls
-                    ctypes.c_char_p,    # ext_port
-                    ctypes.c_char_p,    # proto
-                    ctypes.c_char_p,    # int_port
-                    ctypes.c_char_p,    # int_client
-                    ctypes.c_char_p,    # desc
-                    ctypes.c_char_p,    # duration
-                    ctypes.c_char_p     # enabled
-                ]
-                self.lib.UPNP_AddPortMapping.restype = ctypes.c_int
-                
-                self.urls = None
-                self.data = None
-                self.local_ip = None  # 初始化 local_ip
-            
-            def set_local_ip(self, ip):
-                """设置本地 IP"""
-                self.local_ip = ip
-            
-            def discover(self):
-                if not self.local_ip:
-                    print("错误: local_ip 未设置")
-                    return 0
-                    
-                print("调用 upnpDiscover...")
-                print("参数:")
-                print(f"- 本地 IP: {self.local_ip}")
-                print("- 超时时间: 5000ms")
-                print("- TTL: 2")
-                
-                # 使用本地 IP 作为多播接口
-                try:
-                    multicast_addr = "239.255.255.250".encode('utf-8')  # 转换为 bytes
-                    self.urls = self.lib.upnpDiscover(
-                        5000,          # 超时时间 (ms)
-                        None,          # 多播接口 (使用默认)
-                        multicast_addr, # 多播地址 (已编码)
-                        2              # TTL
-                    )
-                    
-                    if not self.urls:
-                        print("upnpDiscover 返回空")
-                        print("可能的原因:")
-                        print("1. 路由器未启用 UPnP 功能")
-                        print("2. 路由器的 UPnP 实现不兼容")
-                        print("3. 网络接口配置问题")
-                        print("4. 防火墙阻止了 UPnP 发现")
-                        print("\n建议:")
-                        print("1. 检查路由器设置，确保 UPnP 已启用")
-                        print("2. 尝试重启路由器")
-                        print("3. 检查系统防火墙设置")
-                        print(f"4. 在路由器管理界面搜索 '{self.local_ip}' 相关设置")
-                        return 0
-                    
-                    print("upnpDiscover 成功，正在获取 IGD...")
-                    data = ctypes.c_void_p()
-                    result = self.lib.UPNP_GetValidIGD(self.urls, ctypes.byref(data))
-                    
-                    if result <= 0:
-                        print(f"获取 IGD 失败，错误码: {result}")
-                        print("错误码含义:")
-                        print("0 = 未找到 IGD 设备")
-                        print("-1 = 发生错误")
-                        print("1 = 找到有效的已连接 IGD")
-                        print("2 = 找到有效的未连接 IGD")
-                        print("3 = 找到可能有效的 IGD")
-                        return result
-                        
-                    print(f"获取 IGD 成功，状态: {result}")
-                    print("IGD 状态码含义:")
-                    print("1 = 已连接")
-                    print("2 = 未连接")
-                    print("3 = 状态未知")
-                    
-                    self.data = data
-                    return result
-                    
-                except Exception as e:
-                    print(f"UPnP 设备发现失败: {str(e)}")
-                    print(f"异常类型: {type(e)}")
-                    print(f"异常详情: {e.__dict__ if hasattr(e, '__dict__') else 'No details'}")
-                    return 0
-            
-            def get_external_ip(self):
-                if not self.urls or not self.data:
-                    print("未初始化 UPnP")
-                    return None
-                    
-                print("正在获取外网 IP...")
-                ip = ctypes.create_string_buffer(16)
-                result = self.lib.UPNP_GetExternalIPAddress(self.urls, ip)
-                if result != 0:
-                    print(f"获取外网 IP 失败，错误码: {result}")
-                    return None
-                    
-                ip_str = ip.value.decode()
-                print(f"获取外网 IP 成功: {ip_str}")
-                return ip_str
-            
-            def add_port_mapping(self, ext_port, proto, int_port, int_client, desc):
-                if not self.urls or not self.data:
-                    print("未初始化 UPnP")
-                    return -1
-                
-                print(f"正在添加端口映射: {int_client}:{int_port} -> {ext_port} ({proto})")
-                try:
-                    result = self.lib.UPNP_AddPortMapping(
-                        self.urls,
-                        str(ext_port).encode(),
-                        proto.encode(),
-                        str(int_port).encode(),
-                        int_client.encode(),
-                        desc.encode(),
-                        "0".encode(),
-                        "1".encode()
-                    )
-                    
-                    if result != 0:
-                        print(f"添加端口映射失败，错误码: {result}")
-                        if result == 718:
-                            print("端口已被映射")
-                        elif result == 501:
-                            print("操作被路由器拒绝")
-                        elif result == 402:
-                            print("无效参数")
-                        elif result == 401:
-                            print("未授权")
-                        elif result == 500:
-                            print("内部错误")
-                    else:
-                        print("端口映射添加成功")
-                        
-                    return result
-                    
-                except Exception as e:
-                    print(f"添加端口映射时发生异常: {e}")
-                    return -999
-        
-        # 尝试加载库
-        for lib_path in lib_paths:
-            if os.path.exists(lib_path):
-                try:
-                    miniupnpc = MiniUPnPc(lib_path)
-                    UPNP_AVAILABLE = True
-                    print(f"UPnP support is available (system library: {lib_path})")
-                    break
-                except Exception as e:
-                    print(f"Failed to load {lib_path}: {e}")
-        else:
-            raise ImportError("No suitable miniupnpc library found")
-            
-    except Exception as e:
-        print(f"Warning: miniupnpc not available ({e}), UPnP functionality will be disabled")
-        UPNP_AVAILABLE = False
-
 class NetworkEnvironment:
     """网络环境类型"""
     DIRECT = "direct"              # 直接连接，可以从外部访问
@@ -483,8 +295,6 @@ class NetworkManager(QObject):
         self.username = None
         self.local_ip = None
         self.public_ip = None
-        self.upnp = None
-        self.mapped_port = None
         self.server = None
         self.connected_peers: Dict[int, websockets.WebSocketServerProtocol] = {}
         self.heartbeat_tasks: Dict[int, asyncio.Task] = {}
@@ -503,21 +313,7 @@ class NetworkManager(QObject):
         # 2. 获取公网 IP
         self._get_public_ip()
         
-        # 3. 初始化 UPnP（如果可用）
-        if UPNP_AVAILABLE:
-            print("2. 初始化UPnP...")
-            try:
-                if self.setup_upnp():
-                    print("UPnP初始化成功")
-                else:
-                    print("UPnP初始化失败")
-            except Exception as e:
-                print(f"UPnP初始化出错: {e}")
-                self.upnp = None
-        else:
-            print("2. UPnP不可用，跳过初始化")
-        
-        # 4. 更新网络信息
+        # 3. 更新网络信息
         self.update_network_info()
         
         print("=== 网络初始化完成 ===\n")
@@ -582,127 +378,8 @@ class NetworkManager(QObject):
         
         if not self.public_ip:
             print("警告: 无法获取公网 IP")
-            # 如果有 UPnP，尝试从路由器获取
-            if self.upnp:
-                try:
-                    self.public_ip = self.upnp.get_external_ip()
-                    print(f"从路由器获取到公网 IP: {self.public_ip}")
-                except Exception as e:
-                    print(f"从路由器获取公网 IP 失败: {e}")
         
         print("=== IP 地址获取完成 ===")
-
-    def setup_upnp(self):
-        """设置UPnP"""
-        if not UPNP_AVAILABLE:
-            print("UPnP support is not available (miniupnpc not installed)")
-            return False
-            
-        try:
-            print("\n=== 初始化 UPnP ===")
-            print("当前状态:")
-            print(f"- UPNP_AVAILABLE: {UPNP_AVAILABLE}")
-            print(f"- miniupnpc 类型: {type(miniupnpc)}")
-            
-            self.upnp = miniupnpc
-            self.upnp.set_local_ip(self.local_ip)  # 设置本地 IP
-            
-            print("\n1. 正在搜索 UPnP 设备...")
-            devices = self.upnp.discover()
-            print(f"discover() 返回值: {devices}")
-            if devices <= 0:
-                print("未找到 UPnP 设备")
-                return False
-            print(f"找到 UPnP 设备，状态码: {devices}")
-            
-            print("\n2. 正在获取外网 IP...")
-            try:
-                external_ip = self.upnp.get_external_ip()
-                if external_ip:
-                    print(f"外网 IP: {external_ip}")
-                else:
-                    print("无法获取外网 IP")
-                    return False
-            except Exception as e:
-                print(f"获取外网 IP 失败: {str(e)}")
-                return False
-            
-            print("\n=== UPnP 初始化成功 ===")
-            return True
-            
-        except Exception as e:
-            print(f"UPnP 设置失败: {str(e)}")
-            print(f"异常类型: {type(e)}")
-            print(f"异常详情: {e.__dict__ if hasattr(e, '__dict__') else 'No details'}")
-            self.upnp = None
-            return False
-
-    def map_port(self, port: int) -> Tuple[bool, Optional[str]]:
-        """映射端口到外网"""
-        if not UPNP_AVAILABLE or not self.upnp:
-            print("UPnP 不可用")
-            return False, None
-        
-        try:
-            print(f"\n=== 正在映射端口 {port} ===")
-            print("当前状态:")
-            print(f"- 本地 IP: {self.local_ip}")
-            print(f"- UPnP 对象: {type(self.upnp)}")
-            
-            # 添加端口映射
-            print("\n1. 添加端口映射...")
-            result = self.upnp.add_port_mapping(
-                port,           # 外部端口
-                'TCP',         # 协议
-                port,          # 内部端口
-                self.local_ip, # 内部IP
-                'P2P Secure Chat'  # 描述
-            )
-            
-            if result == 0:
-                self.mapped_port = port
-                try:
-                    external_ip = self.upnp.get_external_ip()
-                    print(f"端口映射成功: {self.local_ip}:{port} -> {external_ip}:{port}")
-                    print("=== 端口映射完成 ===\n")
-                    return True, external_ip
-                except Exception as e:
-                    print(f"端口映射成功但获取外网 IP 失败: {e}")
-                    return True, None
-            else:
-                print(f"端口映射失败，错误码: {result}")
-                return False, None
-            
-        except Exception as e:
-            print(f"端口映射失败: {str(e)}")
-            print(f"异常类型: {type(e)}")
-            print(f"异常详情: {e.__dict__ if hasattr(e, '__dict__') else 'No details'}")
-            return False, None
-
-    def unmap_port(self):
-        """删除端口映射"""
-        if not UPNP_AVAILABLE or not self.upnp or not self.mapped_port:
-            return
-            
-        try:
-            print(f"\n=== 正在删除端口 {self.mapped_port} 的映射 ===")
-            # 检查端口映射是否存在
-            mapping = self.upnp.getspecificportmapping(self.mapped_port, 'TCP')
-            if mapping:
-                # 确认是我们的映射
-                if mapping[0] == self.local_ip:
-                    self.upnp.deleteportmapping(self.mapped_port, 'TCP')
-                    print(f"端口 {self.mapped_port} 的映射已删除")
-                else:
-                    print(f"端口 {self.mapped_port} 被其他应用映射，不删除")
-            else:
-                print(f"端口 {self.mapped_port} 没有映射")
-            
-            self.mapped_port = None
-            print("=== 端口映射删除完成 ===\n")
-            
-        except Exception as e:
-            print(f"删除端口映射失败: {e}")
 
     def update_network_info(self):
         """更新并发送网络信息"""
@@ -715,10 +392,7 @@ class NetworkManager(QObject):
         return {
             "local_ip": self.local_ip,
             "public_ip": self.public_ip,
-            "mapped_port": self.mapped_port,
-            "upnp_available": UPNP_AVAILABLE and self.upnp is not None,
-            "username": self.username,
-            "user_id": self.user_id
+            "stun_results": self.network_analyzer.stun_results if hasattr(self.network_analyzer, 'stun_results') else []
         }
 
     async def start(self, port: int = None):

@@ -1,124 +1,76 @@
-# P2P Secure Chat
+# TalkAbout
 
-一个基于 P2P 的安全即时通讯应用，支持端到端加密和自动网络发现。
+一个基于 P2P 的聊天应用。
 
-## 功能特点
+## 特性
 
-- 🔒 端到端加密通信
-  - RSA 密钥对自动生成
-  - 消息加密传输和存储
-  - 密钥安全管理
-
-- 👥 好友系统
-  - 好友请求发送/接收
-  - 好友列表管理
-  - 在线状态显示
-  - 未读消息提醒
-
-- 🌐 网络功能
-  - P2P 直接通信
-  - 自动节点发现
-  - UPnP 自动端口映射
-  - NAT 穿透支持
-  - 心跳检测和自动重连
-  - IP 地址显示（本地/公网）
-
-- 💬 消息功能
-  - 实时消息发送/接收
-  - 离线消息存储
-  - 消息历史记录
-  - 已读状态显示
-
-- 🎨 用户界面
-  - 深色主题
-  - 实时状态显示
-  - 网络信息监控
-  - 简洁的聊天界面
+- 基于 WebSocket 的 P2P 通信
+- 支持本地网络和 STUN 穿透
+- 支持大文件传输
+- 支持特殊字符和 Unicode
+- 支持并发消息处理
+- 美观的 Qt 用户界面
+- SQLite 数据持久化
 
 ## 系统要求
 
-- Python 3.9 或更高版本
-- 支持 UPnP 的路由器（可选，用于自动端口映射）
+- Python 3.10 或更高版本
+- 支持 STUN 的网络环境
+- 操作系统：Windows/macOS/Linux
 
-## 安装说明
+## 安装
 
 1. 克隆仓库：
 
 ```bash
-git clone https://github.com/icaman3000/p2p-secure-chat.git
-cd p2p-secure-chat
+git clone https://github.com/yourusername/talkabout.git
+cd talkabout
 ```
 
-2. 安装 Poetry（如果尚未安装）：
-
-```bash
-curl -sSL https://install.python-poetry.org | python3 -
-```
-
-3. 安装依赖：
+2. 安装依赖：
 
 ```bash
 poetry install
 ```
 
-## 运行应用
+## 使用
 
-1. 激活虚拟环境：
-
-```bash
-poetry shell
-```
-
-2. 运行应用：
+1. 启动应用：
 
 ```bash
-python src/main.py
+poetry run python src/main.py
 ```
 
-## 使用说明
+2. 连接流程：
+- 应用启动时会自动获取本地和公网 IP
+- 尝试 STUN 穿透
+- 建立 P2P 连接
 
-1. 首次运行时，程序会自动：
-   - 生成 RSA 密钥对
-   - 检测网络环境
-   - 尝试 UPnP 端口映射
+## 开发
 
-2. 用户注册/登录：
-   - 创建新账户或登录现有账户
-   - 密码会安全存储
+1. 安装开发依赖：
 
-3. 添加好友：
-   - 发送好友请求
-   - 接受/拒绝好友请求
-   - 管理好友列表
+```bash
+poetry install --with dev
+```
 
-4. 开始聊天：
-   - 选择好友开始聊天
-   - 消息会自动加密
-   - 支持离线消息
+2. 运行测试：
 
-## 网络功能说明
+```bash
+poetry run pytest
+```
 
-- 自动获取本地和公网 IP 地址
-- 支持 UPnP 自动端口映射
-- 自动发现局域网内的其他用户
-- 支持 NAT 穿透，实现跨网络通信
-- 定期心跳检测，保持连接稳定
+3. 代码格式化：
 
-## 安全特性
-
-- RSA 非对称加密
-- 端到端加密通信
-- 安全的密钥交换
-- 加密消息存储
-
-## 开发计划
-
-详见 [DEVELOPMENT.md](DEVELOPMENT.md)
-
-## 贡献指南
-
-欢迎提交 Issue 和 Pull Request！
+```bash
+poetry run black .
+poetry run isort .
+```
 
 ## 许可证
 
-MIT License
+MIT
+
+## 贡献
+
+欢迎提交 Issue 和 Pull Request！

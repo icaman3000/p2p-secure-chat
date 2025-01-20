@@ -7,14 +7,15 @@ from PyQt6.QtWidgets import (
     QMessageBox
 )
 from PyQt6.QtCore import pyqtSignal
-from src.utils.database import register_user, verify_user, init_database
-from sqlalchemy.orm import Session
+from src.utils.database import register_user, verify_user, init_database, get_session
 
 class LoginWidget(QWidget):
     login_successful = pyqtSignal(int, str)  # 发送用户ID和用户名
     
     def __init__(self):
         super().__init__()
+        # 确保系统数据库已初始化
+        get_session()
         self.init_ui()
     
     def init_ui(self):
