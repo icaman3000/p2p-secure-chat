@@ -9,12 +9,25 @@ from src.ui.main_window import MainWindow
 from src.utils.database import init_database
 from src.utils.connection_manager import ConnectionManager
 from src.utils.network import NetworkManager
+from src.utils.relay_server import RelayServer
 
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+
+async def start_relay_server():
+    """启动中继服务器"""
+    try:
+        relay_port = int(os.getenv('RELAY_PORT', '8765'))
+        relay_server = RelayServer(port=relay_port)
+        await relay_server.start()
+        logging.info(f"中继服务器已启动在端口 {relay_port}")
+        return relay_server
+    except Exception as e:
+        logging.error(f"中继服务器启动失败: {e}")
+        return None
 
 async def init_network():
     """初始化网络连接"""
@@ -40,7 +53,9 @@ async def init_network():
         })
     
     # 配置中继服务器
-    relay_server = os.getenv('RELAY_SERVER', 'ws://localhost:8765')
+    relay_host = os.getenv('RELAY_HOST', 'localhost')
+    relay_port = int(os.getenv('RELAY_PORT', '8765'))
+    relay_server = f"ws://{relay_host}:{relay_port}"
     
     # 初始化连接管理器
     connection_manager = ConnectionManager(
@@ -66,6 +81,9 @@ async def main():
         # 初始化数据库
         init_database(0)
         
+        # 启动中继服务器
+        relay_server = await start_relay_server()
+        
         # 初始化网络
         network_manager, connection_manager = await init_network()
         
@@ -90,6 +108,9 @@ async def main():
             await network_manager.stop()
         if 'connection_manager' in locals():
             await connection_manager.stop()
+        if 'relay_server' in locals() and relay_server:
+            await relay_server.stop()
+            logging.info("中继服务器已停止")
 
 if __name__ == "__main__":
     try:
