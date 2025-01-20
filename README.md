@@ -61,7 +61,7 @@
 
 1. 克隆仓库：
 ```bash
-git clone https://github.com/yourusername/p2p-secure-chat.git
+git clone https://github.com/icaman3000/p2p-secure-chat.git
 cd p2p-secure-chat
 ```
 
