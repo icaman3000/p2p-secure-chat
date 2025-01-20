@@ -80,11 +80,25 @@ class User(Base):
     public_key = Column(String)
     private_key = Column(String)
     
+    # 关系
+    devices = relationship('Device', back_populates='user')
     contacts = relationship('Contact', foreign_keys='Contact.user_id', back_populates='user')
     sent_friend_requests = relationship('FriendRequest', foreign_keys='FriendRequest.sender_id', back_populates='sender')
     received_friend_requests = relationship('FriendRequest', foreign_keys='FriendRequest.recipient_id', back_populates='recipient')
     sent_messages = relationship('Message', foreign_keys='Message.sender_id', back_populates='sender')
     received_messages = relationship('Message', foreign_keys='Message.recipient_id', back_populates='recipient')
+
+class Device(Base):
+    """设备模型"""
+    __tablename__ = 'devices'
+    
+    id = Column(String, primary_key=True)  # 设备ID
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    last_sync = Column(DateTime, default=datetime.now)
+    is_active = Column(Boolean, default=True)
+    
+    # 关系
+    user = relationship('User', back_populates='devices')
 
 class Contact(Base):
     __tablename__ = 'contacts'
@@ -787,6 +801,110 @@ def process_friend_request(request_id: int, accepted: bool):
     except Exception as e:
         session.rollback()
         return False, str(e)
+
+def register_device(user_id: int, device_id: str) -> tuple[bool, str]:
+    """注册新设备"""
+    session = get_session()
+    try:
+        # 检查设备是否已存在
+        existing_device = session.query(Device).filter_by(id=device_id).first()
+        if existing_device:
+            if existing_device.user_id != user_id:
+                return False, "Device ID already registered to another user"
+            existing_device.last_sync = datetime.now()
+            existing_device.is_active = True
+            session.commit()
+            return True, "Device reactivated"
+            
+        # 检查当前活跃设备数量
+        active_devices = session.query(Device).filter_by(
+            user_id=user_id,
+            is_active=True
+        ).count()
+        
+        if active_devices >= 2:
+            return False, "Maximum number of devices (2) reached. Please logout from another device first."
+            
+        # 创建新设备记录
+        new_device = Device(
+            id=device_id,
+            user_id=user_id,
+            last_sync=datetime.now(),
+            is_active=True
+        )
+        session.add(new_device)
+        session.commit()
+        return True, "Device registered successfully"
+        
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error registering device: {e}")
+        return False, str(e)
+    finally:
+        session.close()
+
+def deactivate_device(device_id: str) -> tuple[bool, str]:
+    """停用设备"""
+    session = get_session()
+    try:
+        device = session.query(Device).filter_by(id=device_id).first()
+        if device:
+            device.is_active = False
+            session.commit()
+            return True, "Device deactivated successfully"
+        return False, "Device not found"
+    except Exception as e:
+        session.rollback()
+        return False, str(e)
+    finally:
+        session.close()
+
+def get_active_devices_count(user_id: int) -> int:
+    """获取用户当前活跃设备数量"""
+    session = get_session()
+    try:
+        return session.query(Device).filter_by(
+            user_id=user_id,
+            is_active=True
+        ).count()
+    finally:
+        session.close()
+
+def get_user_devices(user_id: int) -> list:
+    """获取用户的所有活跃设备"""
+    session = get_session()
+    try:
+        devices = session.query(Device).filter_by(
+            user_id=user_id,
+            is_active=True
+        ).all()
+        
+        return [
+            {
+                'id': device.id,
+                'last_sync': device.last_sync.strftime('%Y-%m-%d %H:%M:%S')
+            }
+            for device in devices
+        ]
+    except Exception as e:
+        logger.error(f"Error getting user devices: {e}")
+        return []
+    finally:
+        session.close()
+
+def update_device_sync_time(device_id: str):
+    """更新设备同步时间"""
+    session = get_session()
+    try:
+        device = session.query(Device).filter_by(id=device_id).first()
+        if device:
+            device.last_sync = datetime.now()
+            session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error updating device sync time: {e}")
+    finally:
+        session.close()
 
 if __name__ == "__main__":
     # 检查用户 222 的数据库状态

@@ -16,6 +16,15 @@ class PeerInfo:
     public_addr: Optional[Tuple[str, int]] = None
     connection: Optional[asyncio.StreamWriter] = None
 
+class SyncMessageType:
+    """同步消息类型"""
+    DEVICE_DISCOVERY = 'device_discovery'     # 设备发现
+    DEVICE_RESPONSE = 'device_response'       # 设备响应
+    SYNC_REQUEST = 'sync_request'            # 同步请求
+    SYNC_DATA = 'sync_data'                  # 同步数据
+    FRIEND_DATA_REQUEST = 'friend_data_request'  # 向好友请求数据
+    FRIEND_DATA_RESPONSE = 'friend_data_response'  # 好友响应数据
+
 class ConnectionManager(QObject):
     """连接管理器 - 专注于安全的点对点通信"""
     
@@ -51,6 +60,8 @@ class ConnectionManager(QObject):
             'public_ip': None,
             'stun_results': []
         }
+        
+        self.device_id = self._generate_device_id()
         
     def set_user_info(self, user_id: int, username: str):
         """设置用户信息"""
@@ -386,4 +397,144 @@ class ConnectionManager(QObject):
             "local_port": self.local_port,
             "stun_results": self.stun_results,
             "peer_count": len(self.peers)
-        } 
+        }
+
+    def _generate_device_id(self) -> str:
+        """生成设备ID"""
+        import uuid
+        import platform
+        import hashlib
+        
+        # 获取系统信息
+        system_info = {
+            'platform': platform.system(),
+            'node': platform.node(),
+            'machine': platform.machine(),
+            'processor': platform.processor(),
+            'uuid': str(uuid.uuid4())
+        }
+        
+        # 生成唯一标识
+        info_str = str(system_info)
+        return hashlib.sha256(info_str.encode()).hexdigest()[:16]
+        
+    async def broadcast_device_discovery(self):
+        """广播设备发现消息"""
+        discovery_message = {
+            'type': SyncMessageType.DEVICE_DISCOVERY,
+            'user_id': self.user_id,
+            'username': self.username,
+            'device_id': self.device_id,
+            'timestamp': datetime.now().timestamp()
+        }
+        
+        # 广播消息到所有可能的端口
+        for port in range(8000, 9000):
+            try:
+                await self.send_message_to_port('127.0.0.1', port, discovery_message)
+            except Exception as e:
+                logger.debug(f"Failed to send discovery message to port {port}: {e}")
+                
+    async def handle_device_discovery(self, message: dict):
+        """处理设备发现消息"""
+        if message['user_id'] == self.user_id and message['device_id'] != self.device_id:
+            # 响应其他设备的发现请求
+            response = {
+                'type': SyncMessageType.DEVICE_RESPONSE,
+                'user_id': self.user_id,
+                'username': self.username,
+                'device_id': self.device_id,
+                'timestamp': datetime.now().timestamp()
+            }
+            await self.send_message(message['device_id'], response)
+            
+    async def handle_device_response(self, message: dict):
+        """处理设备响应消息"""
+        if message['user_id'] == self.user_id:
+            # 发送同步请求
+            sync_request = {
+                'type': SyncMessageType.SYNC_REQUEST,
+                'user_id': self.user_id,
+                'device_id': self.device_id,
+                'timestamp': datetime.now().timestamp()
+            }
+            await self.send_message(message['device_id'], sync_request)
+            
+    async def handle_sync_request(self, message: dict):
+        """处理同步请求"""
+        if message['user_id'] == self.user_id:
+            # 获取本地数据
+            from src.utils.database import get_friend_list, get_messages_between_users
+            
+            friends = get_friend_list(self.user_id)
+            messages = []
+            for friend in friends:
+                friend_messages = get_messages_between_users(self.user_id, friend['id'])
+                messages.extend(friend_messages)
+                
+            # 发送同步数据
+            sync_data = {
+                'type': SyncMessageType.SYNC_DATA,
+                'user_id': self.user_id,
+                'device_id': self.device_id,
+                'timestamp': datetime.now().timestamp(),
+                'data': {
+                    'friends': friends,
+                    'messages': messages
+                }
+            }
+            await self.send_message(message['device_id'], sync_data)
+            
+    async def handle_sync_data(self, message: dict):
+        """处理同步数据"""
+        if message['user_id'] == self.user_id:
+            try:
+                # 更新本地数据
+                from src.utils.database import add_friend, save_message
+                
+                data = message['data']
+                
+                # 同步好友列表
+                for friend in data['friends']:
+                    add_friend(self.user_id, friend['id'], friend['username'])
+                    
+                # 同步消息
+                for msg in data['messages']:
+                    save_message(
+                        msg['sender_id'],
+                        msg['recipient_id'],
+                        msg['content'],
+                        msg['timestamp'] if 'timestamp' in msg else None,
+                        msg['encryption_key'] if 'encryption_key' in msg else None
+                    )
+                    
+                # 更新同步时间
+                from src.utils.database import update_device_sync_time
+                update_device_sync_time(self.device_id)
+                
+                logger.info("Data synchronization completed successfully")
+                
+            except Exception as e:
+                logger.error(f"Error processing sync data: {e}")
+                
+    async def _handle_message(self, peer_id: str, message: dict):
+        """处理接收到的消息"""
+        try:
+            msg_type = message.get('type')
+            
+            # 处理同步相关消息
+            if msg_type == SyncMessageType.DEVICE_DISCOVERY:
+                await self.handle_device_discovery(message)
+            elif msg_type == SyncMessageType.DEVICE_RESPONSE:
+                await self.handle_device_response(message)
+            elif msg_type == SyncMessageType.SYNC_REQUEST:
+                await self.handle_sync_request(message)
+            elif msg_type == SyncMessageType.SYNC_DATA:
+                await self.handle_sync_data(message)
+            else:
+                # 处理其他类型的消息
+                if self.message_handler:
+                    await self.message_handler(peer_id, message)
+                    
+        except Exception as e:
+            logger.error(f"Error handling message: {e}") 

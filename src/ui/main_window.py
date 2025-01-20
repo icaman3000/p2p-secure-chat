@@ -363,7 +363,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Error checking pending friend requests: {e}")
             
-    def on_login_successful(self, user_id: int, username: str):
+    async def on_login_successful(self, user_id: int, username: str):
         """登录成功的处理函数"""
         try:
             logging.info(f"用户登录成功: user_id={user_id}, username={username}")
@@ -377,14 +377,31 @@ class MainWindow(QMainWindow):
             # 等待连接设置完成
             def check_connection():
                 if self.connection_manager:
+                    # 注册设备
+                    from src.utils.database import register_device
+                    success, message = register_device(
+                        user_id,
+                        self.connection_manager.device_id
+                    )
+                    
+                    if not success:
+                        QMessageBox.warning(self, "Error", f"Failed to register device: {message}")
+                        return
+                        
                     # 设置network_manager
                     self.window.set_network_manager(self.connection_manager)
+                    
                     # 显示主窗口
                     self.window.show()
+                    
                     # 隐藏登录窗口
                     self.login_widget.hide()
+                    
                     # 检查待处理的好友请求
                     self.window.check_pending_friend_requests()
+                    
+                    # 启动设备发现
+                    self.loop.create_task(self.connection_manager.broadcast_device_discovery())
                 else:
                     # 100ms后再次检查
                     QTimer.singleShot(100, check_connection)
