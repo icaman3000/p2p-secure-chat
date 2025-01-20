@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
+env/
 build/
 develop-eggs/
 dist/
@@ -21,11 +22,9 @@ wheels/
 *.egg
 
 # Virtual Environment
-.env
-.venv
-env/
 venv/
 ENV/
+.env
 
 # IDE
 .idea/
@@ -33,15 +32,14 @@ ENV/
 *.swp
 *.swo
 
-# Project specific
-data/
-*.db
-*.pem
-*.key
-analysis/
-
 # Logs
 *.log
+
+# Local development
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
 # macOS
 .DS_Store 

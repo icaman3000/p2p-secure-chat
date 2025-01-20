@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QMessageBox,
     QStyleFactory,
+    QStatusBar,
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPalette, QColor
@@ -46,6 +47,11 @@ class MainWindow(QMainWindow):
         self.user_info_label.setStyleSheet("font-weight: bold; margin-bottom: 10px;")
         left_layout.addWidget(self.user_info_label)
         
+        # 添加网络信息标签
+        self.network_info_label = QLabel()
+        self.network_info_label.setStyleSheet("color: #666; font-size: 10px;")
+        left_layout.addWidget(self.network_info_label)
+        
         # 添加状态标签和进度条
         status_layout = QHBoxLayout()
         self.status_label = QLabel("Disconnected")
@@ -78,10 +84,18 @@ class MainWindow(QMainWindow):
         self.login_widget.login_successful.connect(self.on_login_successful)
         network_manager.connection_status_changed.connect(self.on_connection_status_changed)
         network_manager.message_received.connect(self.on_message_received)
+        network_manager.network_info_updated.connect(self.update_network_info)
         
         # 初始化聊天窗口缓存
         self.chat_widgets = {}
-    
+        
+        # 创建状态栏
+        self.statusBar = QStatusBar()
+        self.setStatusBar(self.statusBar)
+        
+        # 更新网络信息
+        self.update_network_info(network_manager.get_network_info())
+        
     def init_theme(self):
         """初始化应用主题"""
         # 设置应用样式
@@ -149,8 +163,7 @@ class MainWindow(QMainWindow):
             self.user_info_label.setText(f"当前用户: {self.username}")
             
             # 设置 network_manager 的用户信息
-            network_manager.user_id = user_id
-            network_manager.username = username
+            network_manager.set_user_info(user_id, username)
             print("已设置 network_manager 的用户信息")
             
             # 立即加载联系人列表
@@ -163,8 +176,9 @@ class MainWindow(QMainWindow):
             self.chat_stack.addWidget(default_chat)
             self.chat_stack.setCurrentWidget(default_chat)
             
-            # 连接到网络
-            asyncio.create_task(self._connect_to_network())
+            # 连接到网络（使用事件循环）
+            loop = asyncio.get_event_loop()
+            loop.create_task(self._connect_to_network())
             
         except Exception as e:
             logger.error(f"登录处理出错: {e}")
@@ -174,16 +188,32 @@ class MainWindow(QMainWindow):
     async def _connect_to_network(self):
         """连接到网络（异步）"""
         try:
-            await network_manager.start(self.user_id, self.username)
-            print(f"网络连接已建立: user_id={self.user_id}")
+            # 尝试从8000开始，每次失败时端口号加1
+            port = 8000
+            max_retries = 10
             
-            # 更新未读消息数
-            self.update_unread_counts()
-            
-            # 再次刷新联系人列表以确保最新状态
-            print("正在刷新联系人列表...")
-            contacts = self.contact_list.load_contacts()
-            print(f"联系人列表已更新: {contacts}")
+            for attempt in range(max_retries):
+                try:
+                    if await network_manager.start(port):
+                        print(f"网络连接已建立: user_id={self.user_id}, port={port}")
+                        
+                        # 更新未读消息数
+                        self.update_unread_counts()
+                        
+                        # 再次刷新联系人列表以确保最新状态
+                        print("正在刷新联系人列表...")
+                        contacts = self.contact_list.load_contacts()
+                        print(f"联系人列表已更新: {contacts}")
+                        break
+                except Exception as e:
+                    if "address already in use" in str(e):
+                        print(f"端口 {port} 已被占用，尝试下一个端口")
+                        port += 1
+                        if attempt == max_retries - 1:
+                            raise RuntimeError("无法找到可用端口")
+                        continue
+                    else:
+                        raise  # 其他错误直接抛出
             
         except Exception as e:
             logger.error(f"网络连接失败: {e}")
@@ -284,3 +314,61 @@ class MainWindow(QMainWindow):
                 self.contact_list.load_contacts()
         except Exception as e:
             logger.error(f"Error updating unread counts: {e}") 
+    
+    def init_ui(self):
+        """初始化UI"""
+        self.setWindowTitle('P2P Secure Chat')
+        self.resize(800, 600)
+        
+        # 创建主布局
+        layout = QVBoxLayout()
+        
+        # 创建堆叠窗口部件
+        self.stack = QStackedWidget()
+        layout.addWidget(self.stack)
+        
+        # 创建登录窗口部件
+        self.login_widget = LoginWidget()
+        self.stack.addWidget(self.login_widget)
+        
+        # 创建联系人列表窗口部件
+        self.contact_list = ContactList()
+        self.stack.addWidget(self.contact_list)
+        
+        # 设置主布局
+        central_widget = QWidget()
+        central_widget.setLayout(layout)
+        self.setCentralWidget(central_widget)
+        
+        # 创建状态栏
+        self.statusBar = QStatusBar()
+        self.setStatusBar(self.statusBar)
+        
+        # 创建状态栏标签
+        self.network_info_label = QLabel()
+        self.statusBar.addPermanentWidget(self.network_info_label)
+        
+        # 更新网络信息
+        self.update_network_info()
+        
+        # 连接信号
+        self.login_widget.login_success.connect(self.on_login_success)
+        
+    def update_network_info(self, info):
+        """更新网络信息显示"""
+        if not info:
+            return
+            
+        network_info = []
+        if info.get('local_ip'):
+            network_info.append(f"Local IP: {info['local_ip']}")
+        if info.get('public_ip'):
+            network_info.append(f"Public IP: {info['public_ip']}")
+        if info.get('mapped_port'):
+            network_info.append(f"Port: {info['mapped_port']}")
+        if info.get('upnp_available'):
+            network_info.append("UPnP: Available")
+        else:
+            network_info.append("UPnP: Not available")
+            
+        self.network_info_label.setText(" | ".join(network_info)) 

@@ -60,6 +60,12 @@ def load_keypair(username):
 
 def encrypt_message(message, recipient_id):
     """加密消息"""
+    # 检查用户目录和密钥是否存在，如果不存在则创建
+    user_dir = f"data/users/{recipient_id}"
+    if not os.path.exists(f"{user_dir}/public.pem"):
+        print(f"Creating key pair for user {recipient_id}")
+        generate_key_pair(recipient_id)
+    
     # 生成随机对称密钥
     symmetric_key = Fernet.generate_key()
     f = Fernet(symmetric_key)
@@ -68,7 +74,7 @@ def encrypt_message(message, recipient_id):
     encrypted_message = f.encrypt(message.encode())
     
     # 加载接收者的公钥
-    with open(f"data/users/{recipient_id}/public.pem", "rb") as key_file:
+    with open(f"{user_dir}/public.pem", "rb") as key_file:
         recipient_key = serialization.load_pem_public_key(key_file.read())
     
     # 使用接收者的公钥加密对称密钥
@@ -89,12 +95,18 @@ def encrypt_message(message, recipient_id):
 
 def decrypt_message(encrypted_data, user_id):
     """解密消息"""
+    # 检查用户目录和密钥是否存在，如果不存在则创建
+    user_dir = f"data/users/{user_id}"
+    if not os.path.exists(f"{user_dir}/private.pem"):
+        print(f"Creating key pair for user {user_id}")
+        generate_key_pair(user_id)
+    
     # 将base64字符串转回bytes
     encrypted_message = base64.b64decode(encrypted_data["message"].encode('utf-8'))
     encrypted_key = base64.b64decode(encrypted_data["key"].encode('utf-8'))
     
     # 使用私钥解密对称密钥
-    with open(f"data/users/{user_id}/private.pem", "rb") as f:
+    with open(f"{user_dir}/private.pem", "rb") as f:
         private_key = serialization.load_pem_private_key(
             f.read(),
             password=None

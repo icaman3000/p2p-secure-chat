@@ -32,6 +32,7 @@ class ContactList(QWidget):
         super().__init__()
         self.init_ui()
         self.setup_signals()
+        self.processed_requests = set()  # 添加已处理请求的集合
     
     def init_ui(self):
         layout = QVBoxLayout(self)
@@ -188,6 +189,13 @@ class ContactList(QWidget):
     def handle_friend_request(self, request, accepted=True):
         """处理收到的好友请求"""
         print(f"Received friend request: {request}")  # Debug log
+        
+        # 检查请求是否已经处理过
+        if request['id'] in self.processed_requests:
+            return
+            
+        self.processed_requests.add(request['id'])  # 标记请求为已处理
+        
         # 先刷新列表以显示新的请求
         self.load_contacts()
         
@@ -267,6 +275,7 @@ class ContactList(QWidget):
             pending_requests = get_pending_friend_requests(network_manager.user_id)
             print(f"Pending friend requests: {pending_requests}")
             
+            # 只显示待处理请求的列表项，不自动弹出对话框
             for request in pending_requests:
                 item = QListWidgetItem(f"[待处理请求] 来自：{request['sender_username']}")
                 item.setData(100, request)  # 存储请求数据
@@ -298,7 +307,6 @@ class ContactList(QWidget):
                 
                 self.list_widget.addItem(item)
             
-            print(f"Contact list updated with {self.list_widget.count()} items")
             return contacts
             
         except Exception as e:

@@ -13,11 +13,39 @@ data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__
 if not os.path.exists(data_dir):
     os.makedirs(data_dir)
 
-# 创建数据库连接
-db_path = os.path.join(data_dir, 'chat.db')
-engine = create_engine(f'sqlite:///{db_path}')
-Session = sessionmaker(bind=engine)
 Base = declarative_base()
+
+# 全局变量存储当前用户的数据库连接
+current_engine = None
+current_session = None
+
+def init_database(user_id):
+    """初始化指定用户的数据库"""
+    global current_engine, current_session
+    
+    # 创建用户数据目录
+    user_dir = os.path.join(data_dir, f'users/{user_id}')
+    os.makedirs(user_dir, exist_ok=True)
+    
+    # 创建用户专属数据库
+    db_path = os.path.join(user_dir, 'user.db')
+    current_engine = create_engine(f'sqlite:///{db_path}')
+    
+    # 创建数据库表
+    Base.metadata.create_all(current_engine)
+    
+    # 创建会话
+    Session = sessionmaker(bind=current_engine)
+    current_session = Session()
+    
+    print(f"Initialized database for user {user_id}")
+    return current_session
+
+def get_session():
+    """获取当前用户的数据库会话"""
+    if current_session is None:
+        raise RuntimeError("Database not initialized. Call init_database first.")
+    return current_session
 
 class User(Base):
     __tablename__ = 'users'
@@ -39,10 +67,11 @@ class Contact(Base):
     
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    contact_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    contact_id = Column(Integer)  # 不再使用外键约束
+    contact_username = Column(String, nullable=False)  # 存储联系人用户名
+    contact_public_key = Column(String)  # 存储联系人公钥
     
     user = relationship('User', foreign_keys=[user_id], back_populates='contacts')
-    contact = relationship('User', foreign_keys=[contact_id])
     
     __table_args__ = (
         UniqueConstraint('user_id', 'contact_id', name='uq_user_contact'),
@@ -52,13 +81,14 @@ class Message(Base):
     __tablename__ = 'messages'
     
     id = Column(Integer, primary_key=True)
-    sender_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    recipient_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    sender_id = Column(Integer, ForeignKey('users.id'))  # 添加外键约束
+    recipient_id = Column(Integer, ForeignKey('users.id'))  # 添加外键约束
     content = Column(String, nullable=False)
     encryption_key = Column(String)
     timestamp = Column(DateTime, default=datetime.utcnow)
     is_delivered = Column(Boolean, default=False)
     
+    # 定义与User表的关系
     sender = relationship('User', foreign_keys=[sender_id], back_populates='sent_messages')
     recipient = relationship('User', foreign_keys=[recipient_id], back_populates='received_messages')
     
@@ -70,11 +100,13 @@ class FriendRequest(Base):
     __tablename__ = 'friend_requests'
     
     id = Column(Integer, primary_key=True)
-    sender_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    recipient_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    sender_id = Column(Integer, ForeignKey('users.id'))  # 添加外键约束
+    sender_username = Column(String)  # 存储发送者用户名
+    recipient_id = Column(Integer, ForeignKey('users.id'))  # 添加外键约束
     status = Column(String, default='pending')  # pending, accepted, rejected
     created_at = Column(DateTime, default=datetime.utcnow)
     
+    # 定义与User表的关系
     sender = relationship('User', foreign_keys=[sender_id], back_populates='sent_friend_requests')
     recipient = relationship('User', foreign_keys=[recipient_id], back_populates='received_friend_requests')
     
@@ -82,24 +114,24 @@ class FriendRequest(Base):
         UniqueConstraint('sender_id', 'recipient_id', name='uq_sender_recipient'),
     )
 
-# 创建数据库表
-Base.metadata.create_all(engine)
-
 def register_user(username, password):
     """注册新用户"""
-    session = Session()
+    session = get_session()
     try:
-        print(f"\n开始注册新用户: username={username}")
         # 检查用户名是否已存在
         existing_user = session.query(User).filter_by(username=username).first()
         if existing_user:
             raise ValueError("Username already exists")
-            
+        
+        # 生成用户ID (使用正整数)
+        user_id = int(abs(hash(username + str(datetime.utcnow().timestamp()))) % (10 ** 10))
+        
         # 生成密钥对
         keypair = generate_keypair()
         
         # 创建新用户
         new_user = User(
+            id=user_id,
             username=username,
             password=password,
             public_key=str(keypair["public"]),
@@ -107,174 +139,106 @@ def register_user(username, password):
         )
         session.add(new_user)
         session.commit()
+        
         print(f"用户注册成功: id={new_user.id}, username={new_user.username}")
-        return new_user  # 返回整个用户对象
+        return new_user
     except Exception as e:
         session.rollback()
         print(f"用户注册失败: {str(e)}")
         raise e
-    finally:
-        session.close()
-
-def get_user_by_username(username):
-    """通过用户名获取用户"""
-    session = Session()
-    try:
-        user = session.query(User).filter_by(username=username).first()
-        return user
-    finally:
-        session.close()
-
-def get_user_by_id(user_id):
-    """通过ID获取用户"""
-    session = Session()
-    try:
-        user = session.query(User).filter_by(id=user_id).first()
-        return user
-    finally:
-        session.close()
 
 def verify_user(username, password):
     """验证用户登录"""
-    session = Session()
+    session = get_session()
     try:
-        print(f"\n尝试验证用户登录: username={username}")
         user = session.query(User).filter_by(username=username, password=password).first()
         if user:
-            print(f"用户验证成功: id={user.id}, username={user.username}")
             return {'id': user.id, 'username': user.username}
-        print("用户验证失败: 用户名或密码不正确")
         return None
     except Exception as e:
-        print(f"用户验证出错: {str(e)}")
+        print(f"用户验证失败: {str(e)}")
         return None
-    finally:
-        session.close()
 
-def get_contacts(user_id):
-    """获取用户的联系人列表"""
-    print(f"Fetching contacts for user_id: {user_id}")
-    session = Session()
-    try:
-        contacts = session.query(Contact).filter_by(user_id=user_id).all()
-        print(f"Found {len(contacts)} contacts in database")
-        
-        processed_contacts = []
-        for contact in contacts:
-            contact_user = session.query(User).filter_by(id=contact.contact_id).first()
-            if contact_user:
-                print(f"Processing contact: {contact.contact_id} -> {contact_user.username}")
-                processed_contacts.append({
-                    'id': contact.contact_id,
-                    'name': contact_user.username
-                })
-        
-        print(f"Returning {len(processed_contacts)} processed contacts")
-        return processed_contacts
-    finally:
-        session.close()
-
-def add_contact(user_id, contact_username):
+def add_contact(user_id, contact_username, contact_id, contact_public_key):
     """添加联系人"""
-    session = Session()
+    session = get_session()
     try:
-        # 检查联系人是否存在
-        contact_user = session.query(User).filter_by(username=contact_username).first()
-        if not contact_user:
-            raise ValueError("User not found")
-            
         # 检查是否已经是联系人
         existing_contact = session.query(Contact).filter_by(
             user_id=user_id,
-            contact_id=contact_user.id
+            contact_id=contact_id
         ).first()
         
         if existing_contact:
             raise ValueError("Already in your contact list")
-            
-        # 检查是否有待处理的好友请求
-        existing_request = session.query(FriendRequest).filter(
-            FriendRequest.sender_id == user_id,
-            FriendRequest.recipient_id == contact_user.id,
-            FriendRequest.status == 'pending'
-        ).first()
         
-        if existing_request:
-            raise ValueError("Friend request already sent and pending")
-            
-        # 创建好友请求
-        friend_request = FriendRequest(
-            sender_id=user_id,
-            recipient_id=contact_user.id
+        # 创建新联系人
+        contact = Contact(
+            user_id=user_id,
+            contact_id=contact_id,
+            contact_username=contact_username,
+            contact_public_key=contact_public_key
         )
-        session.add(friend_request)
+        session.add(contact)
         session.commit()
         
         return {
-            'request_id': friend_request.id,
-            'recipient_id': contact_user.id,
-            'username': contact_user.username
+            'id': contact.id,
+            'contact_id': contact_id,
+            'username': contact_username
         }
     except Exception as e:
         session.rollback()
         raise e
-    finally:
-        session.close()
+
+def get_contacts(user_id):
+    """获取用户的联系人列表"""
+    session = get_session()
+    try:
+        contacts = session.query(Contact).filter_by(user_id=user_id).all()
+        return [{
+            'id': c.contact_id,
+            'username': c.contact_username,
+            'public_key': c.contact_public_key
+        } for c in contacts]
+    except Exception as e:
+        print(f"获取联系人列表失败: {str(e)}")
+        return []
 
 def handle_friend_request(request_id, user_id, accepted):
     """处理好友请求"""
-    session = Session()
+    session = get_session()
     try:
-        # 获取好友请求
         request = session.query(FriendRequest).filter_by(id=request_id).first()
         if not request:
             raise ValueError("Friend request not found")
             
-        if request.status != 'pending':
-            raise ValueError("Friend request already processed")
-            
-        # 更新请求状态
         request.status = 'accepted' if accepted else 'rejected'
         
         if accepted:
-            # 检查是否已经是联系人
-            existing_contact1 = session.query(Contact).filter_by(
-                user_id=request.sender_id,
-                contact_id=request.recipient_id
-            ).first()
-            
-            existing_contact2 = session.query(Contact).filter_by(
+            # 添加双向好友关系
+            contact1 = Contact(
                 user_id=request.recipient_id,
-                contact_id=request.sender_id
-            ).first()
-            
-            if not existing_contact1:
-                # 为发送者添加联系人
-                contact1 = Contact(
-                    user_id=request.sender_id,
-                    contact_id=request.recipient_id
-                )
-                session.add(contact1)
-                
-            if not existing_contact2:
-                # 为接收者添加联系人
-                contact2 = Contact(
-                    user_id=request.recipient_id,
-                    contact_id=request.sender_id
-                )
-                session.add(contact2)
-                
+                contact_id=request.sender_id,
+                contact_name=session.query(User).filter_by(id=request.sender_id).first().username
+            )
+            contact2 = Contact(
+                user_id=request.sender_id,
+                contact_id=request.recipient_id,
+                contact_name=session.query(User).filter_by(id=request.recipient_id).first().username
+            )
+            session.add(contact1)
+            session.add(contact2)
+        
         session.commit()
         return True
     except Exception as e:
         session.rollback()
         raise e
-    finally:
-        session.close()
 
 def get_pending_friend_requests(user_id):
     """获取待处理的好友请求"""
-    session = Session()
+    session = get_session()
     try:
         requests = session.query(FriendRequest).filter(
             FriendRequest.recipient_id == user_id,
@@ -293,11 +257,11 @@ def get_pending_friend_requests(user_id):
                 })
         return result
     finally:
-        session.close()
+        pass
 
 def save_message(sender_id, recipient_id, content, timestamp=None, encryption_key=None):
     """保存消息到数据库"""
-    session = Session()
+    session = get_session()
     try:
         message = Message(
             sender_id=sender_id,
@@ -320,8 +284,6 @@ def save_message(sender_id, recipient_id, content, timestamp=None, encryption_ke
     except Exception as e:
         session.rollback()
         raise e
-    finally:
-        session.close()
 
 def get_undelivered_messages(recipient_id):
     """获取未发送的消息"""
@@ -486,25 +448,22 @@ def get_sent_friend_requests(user_id):
 
 def get_unread_message_counts(user_id):
     """获取每个联系人的未读消息数量"""
-    session = Session()
+    session = get_session()
     try:
-        # 获取所有未读消息
-        unread_messages = session.query(Message).filter(
+        unread_counts = {}
+        messages = session.query(Message).filter(
             Message.recipient_id == user_id,
             Message.is_delivered == False
         ).all()
         
-        # 统计每个发送者的未读消息数量
-        unread_counts = {}
-        for message in unread_messages:
-            sender_id = message.sender_id
-            if sender_id not in unread_counts:
-                unread_counts[sender_id] = 0
-            unread_counts[sender_id] += 1
-            
+        for msg in messages:
+            if msg.sender_id not in unread_counts:
+                unread_counts[msg.sender_id] = 0
+            unread_counts[msg.sender_id] += 1
+        
         return unread_counts
     finally:
-        session.close()
+        pass
 
 def mark_messages_as_read(recipient_id, sender_id):
     """将来自特定发送者的所有消息标记为已读"""
@@ -554,6 +513,38 @@ def get_messages_between_users(user1_id, user2_id):
     except Exception as e:
         print(f"Error getting messages between users: {e}")
         return []
+
+def get_user_by_id(user_id):
+    """根据ID获取用户信息"""
+    session = get_session()
+    try:
+        user = session.query(User).filter_by(id=user_id).first()
+        if user:
+            return {
+                'id': user.id,
+                'username': user.username,
+                'public_key': user.public_key
+            }
+        return None
+    except Exception as e:
+        print(f"获取用户信息失败: {str(e)}")
+        return None
+
+def get_user_by_username(username):
+    """根据用户名获取用户信息"""
+    session = get_session()
+    try:
+        user = session.query(User).filter_by(username=username).first()
+        if user:
+            return {
+                'id': user.id,
+                'username': user.username,
+                'public_key': user.public_key
+            }
+        return None
+    except Exception as e:
+        print(f"获取用户信息失败: {str(e)}")
+        return None
 
 if __name__ == "__main__":
     # 检查用户 222 的数据库状态

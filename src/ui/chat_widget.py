@@ -11,8 +11,16 @@ class ChatWidget(QWidget):
         super().__init__()
         self.contact_id = contact_id
         self.init_ui()
+        # 完全清空聊天显示区域
+        self.clear_chat_display()
         # 加载聊天历史记录
         self.load_chat_history()
+    
+    def clear_chat_display(self):
+        """完全清空聊天显示区域"""
+        if hasattr(self, 'chat_display'):
+            self.chat_display.clear()
+            self.chat_display.setPlainText("")  # 确保完全清空
     
     def init_ui(self):
         layout = QVBoxLayout(self)
@@ -20,6 +28,7 @@ class ChatWidget(QWidget):
         # 聊天记录显示区域
         self.chat_display = QTextEdit()
         self.chat_display.setReadOnly(True)
+        self.clear_chat_display()  # 确保显示区域是空的
         layout.addWidget(self.chat_display)
         
         # 消息输入区域
@@ -40,127 +49,114 @@ class ChatWidget(QWidget):
             time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         return f"[{time_str}] {sender_name}: {message}"
     
-    def send_message(self):
-        if not self.contact_id:
-            return
-        
-        message = self.message_input.text()
-        if not message:
-            return
-        
-        try:
-            # 获取当前时间戳
-            timestamp = datetime.utcnow()
-            
-            # 加密消息
-            encrypted_data = encrypt_message(message, self.contact_id)
-            
-            # 保存消息到数据库
-            saved_message = save_message(
-                sender_id=network_manager.user_id,
-                recipient_id=self.contact_id,
-                content=encrypted_data['message'],  # 保存加密后的消息内容
-                encryption_key=encrypted_data['key'],  # 保存加密密钥
-                timestamp=timestamp
-            )
-            
-            # 发送消息
-            asyncio.create_task(self._send_message_async({
-                "type": "message",
-                "sender_id": network_manager.user_id,
-                "recipient_id": self.contact_id,
-                "original_message": message,  # 原始消息内容
-                "content": encrypted_data['message'],  # 加密后的内容
-                "key": encrypted_data['key'],
-                "timestamp": timestamp.isoformat()
-            }))
-            
-            # 清空输入框
-            self.message_input.clear()
-            
-        except Exception as e:
-            print(f"Send message error: {str(e)}")
-            if hasattr(e, '__cause__'):
-                print(f"Caused by: {e.__cause__}")
-    
-    async def _send_message_async(self, message_data):
-        """异步发送消息"""
-        try:
-            if await network_manager.send_message(message_data):
-                # 消息发送成功，显示在聊天界面
-                formatted_message = self.format_message(
-                    "Me",
-                    message_data["original_message"],  # 使用原始消息内容
-                    message_data["timestamp"]
-                )
-                self.chat_display.append(formatted_message)
-        except Exception as e:
-            print(f"Error sending message: {str(e)}")
-    
-    def receive_message(self, message):
-        try:
-            print(f"Receiving message in chat widget: {message}")  # 调试信息
-            
-            # 获取发送者信息
-            sender_id = message['sender_id']
-            sender = get_user_by_id(sender_id)
-            sender_name = sender.username if sender else f"User {sender_id}"
-            
-            # 解析时间戳
-            timestamp = datetime.fromisoformat(message.get("timestamp")) if message.get("timestamp") else datetime.utcnow()
-            
-            # 显示接收到的消息
-            formatted_message = self.format_message(
-                sender_name,
-                message['decrypted_content'],  # 使用NetworkManager解密后的内容
-                timestamp.isoformat()
-            )
-            self.chat_display.append(formatted_message)
-            
-        except Exception as e:
-            print(f"Error displaying message: {str(e)}")
-            print(f"Message data: {message}") 
-
     def load_chat_history(self):
         """加载聊天历史记录"""
+        if not self.contact_id or not network_manager.user_id:
+            return
+            
         try:
-            # 获取与当前联系人的所有消息
             messages = get_messages_between_users(network_manager.user_id, self.contact_id)
+            contact = get_user_by_id(self.contact_id)
             
-            # 清空当前显示
-            self.chat_display.clear()
+            if isinstance(contact, dict):
+                contact_name = contact['username']
+            else:
+                contact_name = contact.username
             
-            # 按时间顺序显示消息
             for msg in messages:
                 try:
-                    # 确定发送者名称
-                    if msg['sender_id'] == network_manager.user_id:
-                        sender_name = "Me"
-                    else:
-                        sender = get_user_by_id(msg['sender_id'])
-                        sender_name = sender.username if sender else f"User {msg['sender_id']}"
+                    # 获取发送者名称
+                    sender_name = "Me" if msg['sender_id'] == network_manager.user_id else contact_name
                     
-                    # 解密消息内容
+                    # 获取消息内容
+                    content = msg['content']
+                    
+                    # 如果消息是加密的，尝试解密
                     if msg.get('encryption_key'):
-                        encrypted_data = {
-                            "message": msg['content'],
-                            "key": msg['encryption_key']
-                        }
-                        content = decrypt_message(encrypted_data, network_manager.user_id)
-                    else:
-                        content = msg['content']
+                        try:
+                            encrypted_data = {
+                                'message': content,
+                                'key': msg['encryption_key']
+                            }
+                            # 使用接收者的ID来解密
+                            decryption_user_id = msg['recipient_id']
+                            content = decrypt_message(encrypted_data, decryption_user_id)
+                            print(f"Successfully decrypted message: {content}")
+                        except Exception as e:
+                            print(f"Error decrypting message: {e}")
+                            continue  # 解密失败时跳过这条消息
+                    
+                    # 如果内容看起来是base64编码的加密消息，跳过显示
+                    if isinstance(content, str) and content.startswith('Z0FBQUFB'):
+                        print(f"Skipping encrypted message content")
+                        continue
                     
                     # 格式化并显示消息
                     formatted_message = self.format_message(
                         sender_name,
                         content,
-                        msg['timestamp'].isoformat() if msg['timestamp'] else None
+                        msg['timestamp'].isoformat() if isinstance(msg['timestamp'], datetime) else msg['timestamp']
                     )
                     self.chat_display.append(formatted_message)
                     
                 except Exception as e:
-                    print(f"Error processing message {msg['id']}: {e}")
+                    print(f"Error processing message {msg.get('id')}: {e}")
                     continue
                     
         except Exception as e:
-            print(f"Error loading chat history: {e}") 
+            print(f"Error loading chat history: {e}")
+    
+    def send_message(self):
+        """发送消息"""
+        if not self.contact_id:
+            return
+            
+        content = self.message_input.text().strip()
+        if not content:
+            return
+            
+        try:
+            # 清空输入框
+            self.message_input.clear()
+            
+            # 异步发送消息
+            asyncio.create_task(network_manager.send_message(self.contact_id, content))
+            
+            # 立即在本地显示消息
+            formatted_message = self.format_message(
+                "Me",
+                content,
+                datetime.now().isoformat()
+            )
+            self.chat_display.append(formatted_message)
+            
+        except Exception as e:
+            print(f"Error sending message: {e}")
+    
+    def receive_message(self, message):
+        """接收消息"""
+        try:
+            # 获取发送者信息
+            sender = get_user_by_id(message['sender_id'])
+            if not sender:
+                print(f"Unknown sender: {message['sender_id']}")
+                return
+                
+            # 获取消息内容
+            content = message['content']
+            
+            # 如果内容看起来是base64编码的加密消息，不显示
+            if isinstance(content, str) and content.startswith('Z0FBQUFB'):
+                print("Skipping encrypted message content")
+                return
+                
+            # 格式化并显示消息
+            formatted_message = self.format_message(
+                sender['username'] if isinstance(sender, dict) else sender.username,
+                content,
+                message.get('timestamp')
+            )
+            self.chat_display.append(formatted_message)
+            
+        except Exception as e:
+            print(f"Error displaying message: {e}") 

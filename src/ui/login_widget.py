@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QMessageBox
 )
 from PyQt6.QtCore import pyqtSignal
-from src.utils.database import register_user, get_user_by_username, verify_user
+from src.utils.database import register_user, verify_user, init_database
 from sqlalchemy.orm import Session
 
 class LoginWidget(QWidget):
@@ -57,12 +57,17 @@ class LoginWidget(QWidget):
             QMessageBox.warning(self, "Error", "Please enter both username and password")
             return
         
-        # 检查用户是否存在
-        user = verify_user(username, password)
-        if user:
-            self.login_successful.emit(user['id'], username)  # 发送用户名
-        else:
-            QMessageBox.warning(self, "Login Failed", "Invalid username or password")
+        try:
+            # 检查用户是否存在
+            user = verify_user(username, password)
+            if user:
+                # 初始化用户专属数据库
+                init_database(user['id'])
+                self.login_successful.emit(user['id'], username)  # 发送用户名
+            else:
+                QMessageBox.warning(self, "Login Failed", "Invalid username or password")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Login failed: {str(e)}")
     
     def handle_register(self):
         username = self.username_input.text().strip()
@@ -75,6 +80,8 @@ class LoginWidget(QWidget):
         try:
             # 注册新用户
             user = register_user(username, password)
+            # 初始化用户专属数据库
+            init_database(user.id)
             QMessageBox.information(self, "Success", f"Registration successful! Your user ID is: {user.id}")
             self.login_successful.emit(user.id, username)  # 发送用户名
             
