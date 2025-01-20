@@ -24,53 +24,78 @@ import logging
 logger = logging.getLogger(__name__)
 
 class MainWindow(QMainWindow):
-    def __init__(self, p2p_chat, parent=None):
-        super().__init__(parent)
-        self.p2p_chat = p2p_chat
-        self.setWindowTitle("P2P Secure Chat")
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Secure Chat")
+        self.setMinimumSize(800, 600)
         
-        # 创建中心部件
+        # 初始化主题
+        self.init_theme()
+        
+        # 创建主窗口部件
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         
-        # 创建布局
-        self.layout = QHBoxLayout(self.central_widget)
+        # 创建主布局
+        self.main_layout = QHBoxLayout(self.central_widget)
         
-        # 创建并添加联系人列表
-        self.contact_list = ContactList(self)
-        self.layout.addWidget(self.contact_list)
+        # 创建左侧布局
+        left_layout = QVBoxLayout()
         
-        # 创建并添加聊天窗口
-        self.chat_widget = ChatWidget(self)
-        self.layout.addWidget(self.chat_widget)
+        # 添加用户信息标签
+        self.user_info_label = QLabel("Not logged in")
+        self.user_info_label.setStyleSheet("font-weight: bold; margin-bottom: 10px;")
+        left_layout.addWidget(self.user_info_label)
         
-        # 设置窗口大小
-        self.resize(800, 600)
+        # 添加网络信息标签
+        self.network_info_label = QLabel()
+        self.network_info_label.setStyleSheet("color: #666; font-size: 10px;")
+        left_layout.addWidget(self.network_info_label)
+        
+        # 添加状态标签和进度条
+        status_layout = QHBoxLayout()
+        self.status_label = QLabel("Disconnected")
+        self.status_label.setStyleSheet("color: red;")
+        status_layout.addWidget(self.status_label)
+        
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMaximumWidth(100)
+        self.progress_bar.hide()
+        status_layout.addWidget(self.progress_bar)
+        
+        left_layout.addLayout(status_layout)
+        
+        # 创建左侧联系人列表
+        self.contact_list = ContactList()
+        left_layout.addWidget(self.contact_list)
+        
+        self.main_layout.addLayout(left_layout, 1)
+        
+        # 创建右侧聊天区域
+        self.chat_stack = QStackedWidget()
+        self.main_layout.addWidget(self.chat_stack, 3)
+        
+        # 创建登录窗口
+        self.login_widget = LoginWidget()
+        self.chat_stack.addWidget(self.login_widget)
         
         # 连接信号
-        self.contact_list.contact_selected.connect(self.on_contact_selected)
+        self.contact_list.contact_selected.connect(self.show_chat)
+        self.login_widget.login_successful.connect(self.on_login_successful)
+        network_manager.connection_status_changed.connect(self.on_connection_status_changed)
+        network_manager.message_received.connect(self.on_message_received)
+        network_manager.network_info_updated.connect(self.update_network_info)
         
-    async def connect_to_peer(self, peer_id: str, peer_addr):
-        """连接到对等端"""
-        return await self.p2p_chat.connect_to_peer(peer_id, peer_addr)
+        # 初始化聊天窗口缓存
+        self.chat_widgets = {}
         
-    async def send_message(self, peer_id: str, message: dict):
-        """发送消息"""
-        if self.p2p_chat and self.p2p_chat.manager:
-            return await self.p2p_chat.manager.send_message(peer_id, message)
-        return False
+        # 创建状态栏
+        self.statusBar = QStatusBar()
+        self.setStatusBar(self.statusBar)
         
-    def on_contact_selected(self, contact_id):
-        """处理联系人选择事件"""
-        self.chat_widget.set_current_contact(contact_id)
+        # 更新网络信息
+        self.update_network_info(network_manager.get_network_info())
         
-    def closeEvent(self, event):
-        """处理窗口关闭事件"""
-        # 确保清理P2P连接
-        if self.p2p_chat:
-            asyncio.create_task(self.p2p_chat.cleanup())
-        super().closeEvent(event)
-
     def init_theme(self):
         """初始化应用主题"""
         # 设置应用样式
@@ -229,6 +254,40 @@ class MainWindow(QMainWindow):
                 
         except Exception as e:
             logger.error(f"Error handling received message: {e}")
+    
+    def closeEvent(self, event):
+        """处理窗口关闭事件"""
+        try:
+            print("\n=== 开始应用关闭流程 ===")
+            print("1. 正在获取事件循环...")
+            loop = asyncio.get_event_loop()
+            print("2. 事件循环获取成功")
+            
+            print("3. 正在停止网络管理器...")
+            # 创建一个新的任务来停止网络管理器
+            asyncio.create_task(self._shutdown())
+            print("4. 网络管理器停止任务已创建")
+            
+            print("5. 正在调用父类关闭事件...")
+            super().closeEvent(event)
+            print("6. 父类关闭事件已完成")
+            print("=== 应用关闭流程完成 ===\n")
+            
+        except Exception as e:
+            print(f"\n!!! 应用关闭过程出错 !!!")
+            print(f"错误详情: {str(e)}")
+            print(f"错误类型: {type(e).__name__}")
+            logger.error(f"Error during shutdown: {e}", exc_info=True)
+            print("正在执行应急关闭...\n")
+            super().closeEvent(event)
+    
+    async def _shutdown(self):
+        """异步关闭处理"""
+        try:
+            await network_manager.stop()
+            print("网络管理器已成功停止")
+        except Exception as e:
+            print(f"停止网络管理器时出错: {e}")
     
     def show_main_interface(self):
         """显示主界面"""

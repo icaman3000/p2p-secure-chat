@@ -42,16 +42,4 @@ ENV/
 .env.production.local
 
 # macOS
-.DS_Store
-
-# Project specific
-data/
-logs/
-*.db
-*.sqlite3
-
-# Analysis
-analysis/qtox
-analysis/*.exe
-analysis/*.bin
-analysis/*.app 
+.DS_Store 

@@ -35,10 +35,6 @@ class ConnectionManager:
         self.max_reconnect_attempts = 3  # 最大重连次数
         self.reconnect_delay = 2.0  # 重连延迟（秒）
         
-        # 添加消息处理相关的配置
-        self.max_message_size = 1024 * 1024  # 1MB
-        self.read_buffer_size = 64 * 1024    # 64KB
-        
     def set_message_handler(self, handler):
         """设置消息处理回调函数"""
         self.message_handler = handler
@@ -172,22 +168,13 @@ class ConnectionManager:
         peer_id = None
         
         try:
-            # 配置读取缓冲区大小
-            reader._limit = self.max_message_size
+            # 设置更大的消息限制
+            reader._limit = 1024 * 1024  # 1MB
             
             while True:
                 try:
-                    # 读取消息长度（4字节整数）
-                    length_data = await reader.readexactly(4)
-                    message_length = int.from_bytes(length_data, 'big')
-                    
-                    if message_length > self.max_message_size:
-                        logging.error(f"消息太大: {message_length} bytes")
-                        break
-                        
-                    # 读取消息内容
-                    message_data = await reader.readexactly(message_length)
-                    message = json.loads(message_data.decode())
+                    data = await reader.readuntil(b'\n')
+                    message = json.loads(data.decode().strip())
                     
                     # 处理身份验证消息
                     if not peer_id and 'peer_id' in message:
@@ -205,12 +192,16 @@ class ConnectionManager:
                         await self.message_handler(peer_id, message)
                         
                 except asyncio.IncompleteReadError:
+                    if not writer.is_closing():
+                        writer.close()
                     break
                 except json.JSONDecodeError as e:
                     logging.error(f"无效的消息格式: {e}")
                     continue
                 except Exception as e:
                     logging.error(f"处理消息时出错: {e}")
+                    if not writer.is_closing():
+                        writer.close()
                     break
                     
         except Exception as e:
@@ -221,7 +212,8 @@ class ConnectionManager:
                 # 如果连接断开，尝试重连
                 if addr:
                     self._start_reconnect_task(peer_id, addr)
-            writer.close()
+            if not writer.is_closing():
+                writer.close()
             try:
                 await writer.wait_closed()
             except Exception:
@@ -235,18 +227,13 @@ class ConnectionManager:
                 logging.warning(f"对等端 {peer_id} 未连接")
                 return False
                 
-            # 序列化消息
-            message_data = json.dumps(message).encode()
-            message_length = len(message_data)
-            
-            if message_length > self.max_message_size:
-                logging.error(f"消息太大: {message_length} bytes")
+            if peer.connection.is_closing():
+                logging.warning(f"对等端 {peer_id} 连接已关闭")
                 return False
                 
-            # 发送消息长度和内容
-            length_data = message_length.to_bytes(4, 'big')
-            peer.connection.write(length_data)
-            peer.connection.write(message_data)
+            # 发送消息，添加分隔符
+            data = json.dumps(message).encode() + b'\n'
+            peer.connection.write(data)
             await peer.connection.drain()
             return True
             
@@ -294,6 +281,5 @@ class ConnectionManager:
         return {
             "local_port": self.local_port,
             "stun_results": self.stun_results,
-            "peer_count": len(self.peers),
-            "active_reconnections": len(self.reconnect_tasks)
+            "peer_count": len(self.peers)
         } 
